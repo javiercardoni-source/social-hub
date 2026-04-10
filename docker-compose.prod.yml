@@ -1,0 +1,32 @@
+services:
+  social-hub:
+    container_name: social-hub
+    build:
+      context: .
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=https://jhftgcjiymjcamjikuwe.supabase.co
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_5n5HowidH0GJlGASzqJK-A_Or59RBDT
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    environment:
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_SUPABASE_URL=https://jhftgcjiymjcamjikuwe.supabase.co
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_5n5HowidH0GJlGASzqJK-A_Or59RBDT
+    networks:
+      - easypanel
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.social-hub.rule=Host(`social.kitchcocenter.com`)"
+      - "traefik.http.routers.social-hub.entrypoints=https"
+      - "traefik.http.routers.social-hub.tls.certresolver=letsencrypt"
+      - "traefik.http.services.social-hub.loadbalancer.server.port=3000"
+      - "traefik.http.routers.social-hub-http.rule=Host(`social.kitchcocenter.com`)"
+      - "traefik.http.routers.social-hub-http.entrypoints=http"
+      - "traefik.http.routers.social-hub-http.middlewares=redirect-to-https@file"
+
+networks:
+  easypanel:
+    external: true
