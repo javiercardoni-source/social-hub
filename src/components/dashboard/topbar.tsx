@@ -1,9 +1,8 @@
-"use client"
-
 import { Bell, Plus, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
+import { UserMenu } from "./user-menu"
 
 export function Topbar() {
   return (
@@ -27,6 +26,7 @@ export function Topbar() {
             Nuevo post
           </Link>
         </Button>
+        <UserMenu />
       </div>
     </header>
   )
