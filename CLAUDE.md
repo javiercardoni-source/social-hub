@@ -1,5 +1,20 @@
 # Social Hub — Gestor de Redes Sociales
 
+> ⛔ **ESTE PROYECTO CAMBIÓ DE SERVIDOR EL 2026-09-25.** Vivía en `kitchco-soluciones`
+> con la IP **`2.24.64.7` (Boston)**. Ese VPS **se reinstaló en Campinas, Brasil**, y
+> Hostinger le dio otra IP: **`179.197.225.55`**. Si en algún script, doc o comando
+> aparece la vieja, está desactualizado — ese servidor ya no existe.
+>
+> - **Entrar:** `ssh -i ~/.ssh/id_ed25519 root@179.197.225.55`
+> - **En el servidor:** `/opt/social-hub` · puerto `3650` · social.kitchcocenter.com
+> - **Deployar:** `./infra/deploy.sh social-hub` (desde la raíz del workspace, `~/Documents/Sistema Kitchco/`)
+> - **Por qué se mudó:** desde Boston cada consulta a Supabase —que está en São Paulo—
+>   costaba entre 197 y 523 ms; desde Campinas cuesta 50-78. Eran 21 apps pagando ese
+>   peaje en cada consulta.
+> - El compose que corre es **`docker-compose.bridge.yml`** (no el `.prod.yml`) y la app
+>   publica **solo en `127.0.0.1:3650`**: nginx del host hace de puerta.
+> - Mapa completo de la infra: **`infra/SERVIDORES.md`** en la raíz del workspace.
+
 Dashboard para administrar publicaciones de Instagram, Facebook y otras redes sociales.
 Inspirado en Onlypult (app.onlypult.com).
 
