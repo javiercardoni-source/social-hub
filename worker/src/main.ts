@@ -110,6 +110,24 @@ const health = createServer((_req, res) => {
 })
 health.listen(HEALTH_PORT, "0.0.0.0")
 
+// El reloj (cos_scheduler_tick, migración 0003): cada minuto vence, marca perdidos y
+// encola publicaciones. Toda la lógica está en la base; acá solo se lo llama.
+const TICK_MS = 60_000
+async function tick() {
+  if (shutdown.signal.aborted) return
+  const { data, error } = await db.rpc("cos_scheduler_tick")
+  if (error) {
+    state.lastError = `reloj: ${error.message}`
+    log("el reloj falló", { error: error.message })
+    return
+  }
+  const r = data as Record<string, number | boolean>
+  if (r.expired || r.missed || r.publish || r.reconcile) log("reloj", r)
+}
+void tick()
+const clock = setInterval(() => void tick(), TICK_MS)
+shutdown.signal.addEventListener("abort", () => clearInterval(clock), { once: true })
+
 const done = loop()
 
 async function stop(signal: string) {

@@ -246,10 +246,25 @@ bajar → subir a Drive → crear el asset → `ack`. Si falla a mitad de camino
 
 ## 8. Google Drive
 
-- **Unidad compartida** "Content OS", con la cuenta de servicio
-  `kitchco-bridge@prospectos-489903` como *Administrador de contenido*. Todas las llamadas
-  llevan `supportsAllDrives=true`. agente-google hoy no lo usa: acá se escribe desde cero.
-- Estructura de carpetas: la del paquete, con la marca como segundo nivel:
+> **Actualizado el 26-09-2026:** el Drive del sistema es la **cuenta dedicada
+> `javiercardonibetti@gmail.com`** (la misma del proyecto «javier Instagram»). Es un Gmail
+> común, **no** Google Workspace: no existen unidades compartidas y la cuenta de servicio no
+> sirve (no tiene espacio propio). Se conecta por **OAuth con esa cuenta**.
+
+- **Permiso `drive.file`:** Content OS solo ve y toca **los archivos que él mismo crea**. El
+  archivo personal de Instagram (`JAVI_LIVE_ARCHIVE`, exports `meta-…`) que vive en ese Drive
+  queda **invisible** para el sistema. Respeta la frontera de la decisión D-006 de ese
+  proyecto ("un bug en el publicador no puede poner en riesgo el archivo histórico").
+  `drive.file` no es un permiso sensible: la app de OAuth puede pasar a producción sin la
+  verificación de Google, y así el refresh token **no vence a los 7 días**.
+- **Credenciales:** `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (un cliente OAuth
+  de Google Cloud) + `GOOGLE_DRIVE_REFRESH_TOKEN` (se obtiene una sola vez: Javier entra con la
+  cuenta dedicada y acepta). Se hace **el día de la conexión**, al final.
+- **Mientras tanto, modo simulación:** el almacenamiento es una interfaz con dos
+  implementaciones. `supabase` (bucket privado `cos-media`, para armar y probar todo) y
+  `drive` (la real). Cada archivo guarda `storage_driver` + `storage_key`, así el día de la
+  conexión lo nuevo va a Drive y lo de prueba se puede migrar o descartar.
+- Estructura de carpetas en la cuenta dedicada (la crea el sistema, con `drive.file`):
   ```text
   Content OS/
   ├── 10_ORIGINALS/<marca>/<AAAA-MM>/
@@ -262,7 +277,12 @@ bajar → subir a Drive → crear el asset → `ack`. Si falla a mitad de camino
   cambiar de estado.
 - Subida **resumible** (los videos pueden pesar cientos de MB). Se guarda el `md5Checksum`
   que devuelve Drive para detectar duplicados.
+- **Espacio:** un Gmail común trae 15 GB compartidos con Gmail y Fotos. Verificar cuánto
+  queda libre el día de la conexión (el archivo de Instagram ya usa parte).
 - **Nunca se borra nada de Drive automáticamente.**
+- **Futuro (Misión 6 de «javier Instagram»):** Content OS puede ser ese sistema de
+  publicación. `javi.live` se sumaría como una marca más cuya fuente es el archivo, **solo
+  lectura**, sin escribir nunca en `00_*`–`06_*`. No se construye ahora.
 
 ## 9. Meta: acceso, permisos y publicación
 
@@ -515,6 +535,14 @@ Mobile-friendly para aprobar y contestar desde el celular.
 9. Checklist de credenciales para Javier (§16).
 
 ### Fase 1 — MVP útil: del celular del empleado a Instagram publicado
+
+> **Decisión de Javier (26-09-2026): primero todo el sistema armado, las conexiones al final.**
+> Se construye completo en **modo simulación** (`cos_settings.publish_mode = 'simulated'`,
+> almacenamiento `supabase`): el flujo entero funciona y se ve, pero "publicar" no sale a
+> Meta y los archivos no van a Drive. Cada pantalla muestra una franja «Modo simulación».
+> El día de la conexión: credenciales de Meta y Drive + `publish_mode = 'live'`. Sin código
+> nuevo. Un post publicado en simulación queda marcado (`simulated = true`) y nunca se
+> confunde con uno real.
 - Módulo «Enviar contenido» en Turnos (§7).
 - Ingreso → Drive → asset (§7 y §8).
 - Clasificación y copies con IA (§11).
@@ -607,9 +635,8 @@ Va antes que la 2B porque convierte alcance en pedidos y es mucho más barata qu
    verificar) y decidir qué portfolio es el dueño de la app (§9.2).
 3. En cada Instagram: activar **"Permitir acceso a los mensajes"** (Configuración →
    Mensajes → Herramientas conectadas).
-4. **Google Workspace:** ¿existe? Si existe → crear la unidad compartida "Content OS" y
-   sumar a la cuenta de servicio. Si no → alternativa OAuth con tu cuenta (con la app de OAuth
-   en producción; en modo "testing" el token vence cada 7 días).
+4. ~~Google Workspace~~ → **Resuelto el 26-09-2026:** Drive = cuenta dedicada
+   `javiercardonibetti@gmail.com` por OAuth con `drive.file` (§8). Se conecta al final.
 5. **¿Quién aprueba?** ¿Solo vos, o también Facu o algún encargado por marca?
 6. ~~StohrBurgers en Turnos~~ → **Resuelto el 26-09-2026:** StohrBurgers está **dada de
    baja** y sale del plan. `brothers` / `webbrothers` en Turnos son de **StBrothers**, otra
