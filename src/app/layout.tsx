@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { ErrorReportButton } from "@/components/error-report-button"
 import "./globals.css"
 
 const geistSans = Geist({
@@ -30,6 +31,8 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <TooltipProvider>{children}</TooltipProvider>
+        {/* Argos: botón 🐛 para reportar errores con captura (modo central-only) */}
+        <ErrorReportButton />
       </body>
     </html>
   )

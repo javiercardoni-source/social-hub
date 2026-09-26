@@ -1,0 +1,18 @@
+{
+  "project": "Content OS",
+  "spec_version": "2.0",
+  "architecture": "local-first-drive-master",
+  "media_master": "google_drive",
+  "operational_database": "sqlite",
+  "code_backup": "private_github",
+  "local_media_policy": "temporary_cache_only",
+  "employee_system": "Sistema de Conteo de Horas y Turnos",
+  "platforms": [
+    "instagram",
+    "facebook",
+    "tiktok"
+  ],
+  "safe_mode_default": true,
+  "required_asset_description": true,
+  "cloud_migration_review_days": 90
+}

@@ -1,0 +1,5 @@
+{
+  "//": "Código puro compartido entre la app (Next) y el worker (Node 24 sin compilar). Es ESM.",
+  "type": "module",
+  "private": true
+}

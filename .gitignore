@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.local.example
 
 # vercel
 .vercel
@@ -39,3 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+node_modules
+node_modules.nosync/
+.next.nosync/
+
+# iCloud deja estos marcadores vacíos al copiar desde ~/Documents
+*.fantasma-icloud
+.argos-token.tmp

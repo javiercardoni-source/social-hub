@@ -1,0 +1,45 @@
+# ============================================================================
+# REFERENCIA del compose que corre en el servidor (/opt/social-hub/docker-compose.bridge.yml).
+#
+# El archivo real vive SOLO en el servidor y el deploy lo excluye del rsync
+# (ver infra/deploy.sh). Este ejemplo documenta cómo tiene que quedar cuando se
+# sume el worker (Fase 1). Cambiarlo acá NO cambia el servidor: hay que copiar a mano.
+#
+# Las dos apps publican solo en 127.0.0.1: nginx del host es la única puerta.
+# ============================================================================
+services:
+  social-hub:
+    container_name: social-hub
+    build:
+      context: .
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=https://jhftgcjiymjcamjikuwe.supabase.co
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      - HOSTNAME=0.0.0.0
+    ports:
+      - "127.0.0.1:3650:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  content-os-worker:
+    container_name: content-os-worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env.production
+    # El servidor comparte CPU con ~20 apps: el worker nunca se come más de 1 núcleo.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768m
+    volumes:
+      # Cuenta de servicio de Google, de solo lectura.
+      - /opt/social-hub/secrets/google-sa.json:/secrets/google-sa.json:ro
+    # Sin puertos publicados: su salud la mira Docker desde adentro (HEALTHCHECK).
