@@ -218,7 +218,11 @@ cada paso y verificar que siempre converge al mismo resultado.
 
 ## 7. Ingreso desde Turnos (módulo «Enviar contenido»)
 
-**Del lado de Turnos** (repo propio, migración `0140_content_submissions.sql` — verificar el
+> **Contrato detallado: [`docs/CONTRATO-TURNOS.md`](docs/CONTRATO-TURNOS.md).** Se implementa
+> cuando Turnos commitee el trabajo en curso de otras sesiones (26-09-2026: 45 archivos sin
+> commitear), para no mezclarse ni deployar trabajo ajeno.
+
+**Del lado de Turnos** (repo propio, migración `0142_content_submissions.sql` (0140 y 0141 ya las usó el editor de Historias) — verificar el
 número al escribirla):
 
 - Tabla `content_submissions`: `id, company_id, kitchen_id, brand_slug, created_by,
