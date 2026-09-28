@@ -65,17 +65,17 @@ const CERRAR_MODULO: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
+      mensaje_de_cierre: {
+        type: "string",
+        description: "Mensaje corto para el entrevistado: qué quedó claro en este módulo y qué sigue.",
+      },
       sintesis_md: {
         type: "string",
         description:
           "Síntesis en markdown: (1) Hallazgos clave con citas textuales del entrevistado entre comillas; (2) 2 o 3 formulaciones candidatas (ej: 3 versiones del propósito); (3) Decisiones concretas y reglas que salen de acá; (4) Preguntas abiertas o contradicciones.",
       },
-      mensaje_de_cierre: {
-        type: "string",
-        description: "Mensaje corto para el entrevistado: qué quedó claro en este módulo y qué sigue.",
-      },
     },
-    required: ["sintesis_md", "mensaje_de_cierre"],
+    required: ["mensaje_de_cierre", "sintesis_md"],
   },
 }
 
@@ -141,9 +141,10 @@ export async function interviewTurn(opts: {
   }
 
   const mdl = await model(opts.db)
+  // Al cerrar, la síntesis puede pasar las 9.000 letras: con 4000 tokens se cortaba.
   const res = await anthropic().messages.create({
     model: mdl,
-    max_tokens: 4000,
+    max_tokens: 16000,
     system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
     tools: [CERRAR_MODULO],
     tool_choice: opts.forzarCierre ? { type: "tool", name: "cerrar_modulo" } : { type: "auto" },
