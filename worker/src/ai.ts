@@ -81,7 +81,8 @@ export const Caption = z.object({
     .describe(
       "Frase MUY corta para escribir ENCIMA de la imagen: 2 a 6 palabras, sin emojis ni hashtags. " +
         "Tiene que describir o celebrar lo que SE VE o lo que dijo el empleado (ej: 'Tres onigiris, tres estilos'). " +
-        "PROHIBIDO afirmar hechos que no estén en la descripción: horarios, 'estamos abiertos', precios, promos, 'nuevo', envíos.",
+        "PROHIBIDO afirmar hechos que no estén en la descripción: horarios, 'estamos abiertos', precios, promos, 'nuevo', envíos. " +
+        "Única excepción: el nombre o el precio de un combo de DATOS COMERCIALES VIGENTES, tal cual, cuando la foto es claramente ese combo.",
     ),
   hook: z.string(),
   caption: z.string(),

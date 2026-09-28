@@ -9,6 +9,8 @@ export type BrandContext = {
   slug: string
   toneMd: string
   rules: { forbidden_words?: string[]; open_days?: string; open_hours?: string }
+  /** Datos comerciales vigentes ya filtrados para hoy (datosParaIA). "" = no cargados. */
+  vigentes?: string
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -31,13 +33,20 @@ export const BLOCKING_RISK_FLAGS: readonly RiskFlag[] = ["caras_de_clientes", "m
 export function brandSystemPrompt(b: BrandContext): string {
   const prohibidas = b.rules.forbidden_words?.length ? b.rules.forbidden_words.join(", ") : "(ninguna cargada)"
   const horario = b.rules.open_days ? `${b.rules.open_days}${b.rules.open_hours ? `, de ${b.rules.open_hours}` : ""}` : "no cargado"
+  const vigentes = b.vigentes?.trim()
   return [
     `Trabajás para ${b.name}, una marca de comida con delivery en Buenos Aires (grupo Kitchco).`,
-    `Horario real de atención: ${horario}.`,
+    vigentes ? "" : `Horario real de atención: ${horario}.`,
+    vigentes
+      ? "DATOS COMERCIALES VIGENTES (cargados por el dueño; son la ÚNICA fuente de precios, combos, promos, horarios, zonas y links):\n" + vigentes
+      : "",
     "",
     "Reglas duras (no se negocian):",
     "- No inventes nada. Si no está en la descripción del empleado o no se ve en la imagen, no existe.",
-    "- Nunca inventes precios, promociones, descuentos ni horarios distintos al real.",
+    vigentes
+      ? "- Precios, combos, promos, horarios, zonas y links: SOLO los de DATOS COMERCIALES VIGENTES, copiados tal cual, y solo si el post es sobre eso " +
+        "(no le pongas el precio de un combo a la foto de otro producto). Nunca uses un precio o una promo de publicaciones anteriores."
+      : "- Nunca inventes precios, promociones, descuentos ni horarios distintos al real.",
     `- Palabras prohibidas para esta marca: ${prohibidas}.`,
     "- Distinguí siempre lo que DICE el empleado de lo que SE VE en la imagen.",
     "",
@@ -94,8 +103,8 @@ export function captionPrompt(input: {
     "Formato:",
     "- hook: la primera línea, la que frena el scroll.",
     input.platform === "instagram"
-      ? "- caption: 2 a 4 líneas cortas, con emojis moderados, que cierre con un llamado a pedir por WhatsApp."
-      : "- caption: 2 a 4 líneas, un poco más explicativo que en Instagram, con llamado a pedir por WhatsApp.",
+      ? "- caption: 2 a 4 líneas cortas, con emojis moderados, que cierre con un llamado a pedir (por el canal de los datos vigentes si están; si no, por WhatsApp)."
+      : "- caption: 2 a 4 líneas, un poco más explicativo que en Instagram, con llamado a pedir (por el canal de los datos vigentes si están; si no, por WhatsApp).",
     "- hashtags: 3 a 6, en minúscula, empezando por el de la marca.",
     "- rationale: una línea para quien aprueba, explicando por qué este texto (qué dato usaste).",
     "",

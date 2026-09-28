@@ -67,15 +67,16 @@ export const KITS: Record<string, Kit> = {
     logo: { file: "bijutsukan/logo.png", round: false, aspect: 600 / 171 },
     defaultTemplate: "firma",
   },
-  // Cálida, naranja; sin logo en Instagram → firma con el nombre en Playfair.
+  // Brandbook 28-09-2026 (Javier: "chau naranja"): marfil, negro, rojo profundo y dorado;
+  // títulos en sans condensada bold. Sin logo oficial todavía → firma con el nombre.
   sensaciones: {
-    font: { name: "Playfair Display", file: "playfair-display-latin-700-normal.woff", weight: 700 },
-    small: { name: "Playfair Display", file: "playfair-display-latin-700-normal.woff", weight: 700 },
-    uppercase: false,
-    spacing: 0,
-    text: "#FFFFFF",
-    band: "rgba(234,88,12,0.92)",
-    label: { bg: "#F97316", text: "#FFFFFF" },
+    font: { name: "Oswald", file: "oswald-latin-700-normal.woff", weight: 700 },
+    small: { name: "Montserrat", file: "montserrat-latin-600-normal.woff", weight: 600 },
+    uppercase: true,
+    spacing: 0.02,
+    text: "#F7F6F2",
+    band: "rgba(17,17,17,0.88)",
+    label: { bg: "#C53030", text: "#F7F6F2" },
     wordmark: "Sensaciones de Oriente",
     defaultTemplate: "etiqueta",
   },
@@ -165,10 +166,17 @@ export async function renderOverlay(opts: {
       justifyContent: top ? "flex-start" : "flex-end",
       ...(top ? { paddingTop: safeTop - W * 0.05 } : { paddingBottom: safeBottom - W * 0.05 }),
     }, [
-      el("div", { width: W, alignItems: "center", gap: pad * 0.6, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
-        el("div", { flex: 1 }, [title(kit.text)]),
-        await signature(kit, logoSize),
-      ]),
+      // Con logo: frase y logo lado a lado. Con el nombre escrito (más ancho que un logo):
+      // el nombre va debajo de la frase, si no le come el lugar y se pisan.
+      kit.logo
+        ? el("div", { width: W, alignItems: "center", gap: pad * 0.6, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
+            el("div", { flex: 1 }, [title(kit.text)]),
+            await signature(kit, logoSize),
+          ])
+        : el("div", { width: W, flexDirection: "column", alignItems: "flex-start", gap: pad * 0.35, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
+            title(kit.text),
+            await signature(kit, logoSize * 0.8),
+          ]),
     ])
   } else if (opts.template === "etiqueta" && text) {
     const label = el("div", { alignSelf: "flex-start", maxWidth: W * 0.82, padding: `${pad * 0.35}px ${pad * 0.55}px`, borderRadius: W * 0.025, backgroundColor: kit.label.bg }, [

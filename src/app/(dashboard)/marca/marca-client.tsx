@@ -7,8 +7,10 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { armarBrandbook, aprobarBrandbook, guardarBrandbook, reabrirModulo, turnoEntrevista } from "@/lib/cos/branding-actions"
-import { BookOpen, CheckCircle, Circle, CircleDot, Loader2, Send, Sparkles } from "lucide-react"
+import { BookOpen, CheckCircle, Circle, CircleDot, ClipboardList, Loader2, Send, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { DatosVigentes } from "../../../../shared/cos/datos-vigentes"
+import { DatosVigentesForm } from "./datos-vigentes"
 
 export type ModuloEstado = {
   id: string
@@ -25,13 +27,15 @@ type Props = {
   modulos: ModuloEstado[]
   brandbook: string | null
   brandbookStatus: "none" | "draft" | "approved"
+  datos: DatosVigentes
+  datosAt: string | null
 }
 
-export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus }: Props) {
+export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt }: Props) {
   const router = useRouter()
   const firstOpen = modulos.find((m) => m.status === "in_progress") ?? modulos.find((m) => m.status === "pending") ?? modulos[0]
   const [activo, setActivo] = useState<string>(firstOpen.id)
-  const [vista, setVista] = useState<"chat" | "brandbook">("chat")
+  const [vista, setVista] = useState<"chat" | "brandbook" | "datos">("chat")
   const [texto, setTextoState] = useState("")
   // Borrador en el navegador: si falla el envío o se cierra la pestaña, la respuesta no se pierde.
   const draftKey = `cos-marca-borrador:${brandName}:${activo}`
@@ -147,10 +151,24 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
           <p className="mt-2 px-1 text-[11px] leading-snug text-muted-foreground">
             Al aprobarlo, la IA escribe los textos y las frases sobre las imágenes siguiendo el brandbook.
           </p>
+          <button
+            type="button"
+            onClick={() => setVista("datos")}
+            className={cn("mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm", vista === "datos" ? "bg-primary/10 font-bold text-primary" : "hover:bg-muted")}
+          >
+            <ClipboardList className="h-4 w-4" />
+            <span className="flex-1">Datos vigentes</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", datosAt ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground")}>
+              {datosAt ? "Cargados" : "Vacío"}
+            </span>
+          </button>
+          <p className="mt-2 px-1 text-[11px] leading-snug text-muted-foreground">Precios, combos, promos, horarios y links de hoy.</p>
         </Card>
       </div>
 
-      {vista === "chat" ? (
+      {vista === "datos" ? (
+        <DatosVigentesForm brandName={brandName} datos={datos} actualizado={datosAt} />
+      ) : vista === "chat" ? (
         <Card className="flex min-h-[70vh] flex-col overflow-hidden">
           <div className="border-b px-4 py-3">
             <p className="flex items-center gap-2 font-bold">

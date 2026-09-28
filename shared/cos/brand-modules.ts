@@ -109,5 +109,5 @@ export const VISUAL_BASELINE: Record<string, string> = {
   bijutsukan:
     "Detectado en su Instagram: logo BIJUTSUKAN en letras altas y finas con '— DELIVERY —' espaciado debajo (hoy usamos Bebas Neue); solo blanco y negro. Fotos: fondo oscuro, pizarra negra, flores, guante negro, piezas en primer plano; casi sin texto sobre la imagen.",
   sensaciones:
-    "Detectado en su Instagram: no tiene logo visible (la foto de perfil es un roll con palitos); los posts recientes parecen fotos de banco, sin texto ni marca. La web usa Playfair Display + Noto Serif JP y el color naranja (#F97316). Es la marca con identidad visual más débil: hay que definirla.",
+    "Detectado en su Instagram: no tiene logo visible (la foto de perfil es un roll con palitos); los posts recientes parecen fotos de banco, sin texto ni marca. DECIDIDO por Javier (28-09-2026): se abandona el naranja de la web vieja. Paleta: marfil #F7F6F2, negro #111111, rojo profundo #C53030, dorado suave #C9A96E. Títulos en sans condensada bold (Oswald), textos en Montserrat. Sin logo oficial todavía: se firma con el nombre.",
 }

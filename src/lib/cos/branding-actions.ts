@@ -7,6 +7,7 @@ import { requireMember } from "@/lib/cos/auth"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { interviewTurn, synthesizeBrandbook, type BrandRow, type ChatMsg } from "@/lib/cos/branding"
 import { BRAND_MODULE_IDS, type BrandModuleId } from "../../../shared/cos/brand-modules"
+import { normalizarDatos } from "../../../shared/cos/datos-vigentes"
 
 async function contexto() {
   const member = await requireMember("approver")
@@ -102,5 +103,18 @@ export async function aprobarBrandbook() {
     .eq("id", brand.id)
   if (error) throw aviso(`No se pudo aprobar: ${error.message}`)
   await db.from("cos_audit_log").insert({ event: "brandbook:approved", entity_type: "brand", entity_id: brand.id, actor: member.email ?? member.userId })
+  revalidatePath("/marca")
+}
+
+/** Guarda la ficha de datos vigentes de la marca activa (precios, combos, promos, horarios…). */
+export async function guardarDatosVigentes(datos: unknown) {
+  const { db, brand, member } = await contexto()
+  const limpio = normalizarDatos(datos)
+  const { error } = await db
+    .from("cos_brands")
+    .update({ datos_vigentes: limpio, datos_vigentes_at: new Date().toISOString(), datos_vigentes_by: member.userId })
+    .eq("id", brand.id)
+  if (error) throw aviso(`No se pudieron guardar los datos: ${error.message}`)
+  await db.from("cos_audit_log").insert({ event: "brand:datos_vigentes", entity_type: "brand", entity_id: brand.id, actor: member.email ?? member.userId })
   revalidatePath("/marca")
 }

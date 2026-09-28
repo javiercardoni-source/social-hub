@@ -25,7 +25,8 @@ import { classify, writeCaption } from "./ai.ts"
 import { driveFromEnv } from "./drive.ts"
 import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
 import { syncAccount } from "./metrics.ts"
-import { contextForBrand, syncContext } from "./context.ts"
+import { arDay, contextForBrand, syncContext } from "./context.ts"
+import { datosParaIA, normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
 import { ingestTurnos } from "./turnos.ts"
 import { defaultTemplate, type Template } from "./overlay.ts"
 import {
@@ -78,10 +79,11 @@ async function settings(db: SupabaseClient) {
 
 async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
   const b = (await must(
-    db.from("cos_brands").select("name, slug, tone_md, rules_json").eq("id", brandId).single(),
+    db.from("cos_brands").select("name, slug, tone_md, rules_json, datos_vigentes").eq("id", brandId).single(),
     "marca",
-  )) as { name: string; slug: string; tone_md: string; rules_json: BrandContext["rules"] }
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {} }
+  )) as { name: string; slug: string; tone_md: string; rules_json: BrandContext["rules"]; datos_vigentes: unknown }
+  const vigentes = datosParaIA(normalizarDatos(b.datos_vigentes), arDay(new Date()))
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes }
 }
 
 type AssetRow = {
