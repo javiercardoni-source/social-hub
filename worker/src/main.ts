@@ -165,6 +165,18 @@ void scheduleContext()
 const contextClock = setInterval(() => void scheduleContext(), 30 * 60_000)
 shutdown.signal.addEventListener("abort", () => clearInterval(contextClock), { once: true })
 
+// Historias de Turnos "para redes" (F3): cada 3 minutos, solo si está configurado.
+import("./turnos.ts").then(({ turnosConfig }) => {
+  if (!turnosConfig()) return log("Turnos no configurado (TURNOS_API_URL / CONTENT_OS_SECRET): historias apagadas")
+  const tick = () =>
+    queue
+      .enqueue("ingest:turnos", {}, { dedupeKey: `turnos:${Math.floor(Date.now() / 180_000)}` })
+      .catch((e) => log("no pude encolar Turnos", { error: String(e) }))
+  void tick()
+  const t = setInterval(() => void tick(), 180_000)
+  shutdown.signal.addEventListener("abort", () => clearInterval(t), { once: true })
+})
+
 const done = loop()
 
 async function stop(signal: string) {

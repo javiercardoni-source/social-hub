@@ -129,3 +129,47 @@ Mapa de marcas: `cos_brands.turnos_slugs` (hoy `sensaciones`, `bijutsukan`, `fas
 Un `brand_slug` sin marca en Content OS se deja sin ack y aparece como alerta en Inicio.
 
 Variables en Content OS: `TURNOS_BASE_URL`, `CONTENT_OS_SECRET`.
+
+
+---
+
+## v2 (28-09-2026) — Historias "para redes" · MANDA SOBRE LO ANTERIOR
+
+> Decisión de Javier (28-09): **pasan a Content OS solo las historias que el empleado marca
+> "para redes"**. Es voluntario (no es vigilancia). Reemplaza el módulo «Enviar contenido» de
+> arriba: en vez de una pantalla aparte, se aprovechan las Historias que ya existen en la PWA.
+
+### Lado Turnos
+1. **Migración** (verificar el número; hoy la última es 0148):
+   ```sql
+   alter table public.stories
+     add column para_redes      boolean not null default false,
+     add column brand_slug      text,        -- marca sugerida (una de las de la cocina del empleado)
+     add column redes_nota      text,        -- "¿qué es?" opcional: si viene, la IA no adivina
+     add column redes_status    text check (redes_status in ('pendiente', 'tomada')),
+     add column redes_ref       text,        -- id del asset en Content OS (lo manda el ack)
+     add column redes_taken_at  timestamptz;
+   create index stories_para_redes on public.stories (created_at) where para_redes and redes_status = 'pendiente';
+   ```
+   Al marcar `para_redes`, `redes_status = 'pendiente'`.
+2. **PWA, al publicar una historia**: casilla **"Sugerir para las redes de la marca"** (apagada por
+   defecto). Si la cocina tiene varias marcas, elegir una. Campo opcional "¿qué es?" (producto,
+   algo especial hoy). Texto chico: "Javier la revisa antes de publicar nada".
+3. **Retención**: una historia con `para_redes` y `redes_status = 'pendiente'` **no se borra del
+   bucket** al vencer (24 h) hasta que Content OS la tome (ack). Después sigue la regla normal.
+4. **API** (igual que v1: header `x-content-os-secret` = `CONTENT_OS_SECRET`, comparación en
+   tiempo constante, sin secreto → 401):
+   - `GET /api/v1/integrations/content/pending?limit=20` →
+     `{ "items": [{ "id", "kind": "story", "brand_slug", "submitted_by" (apodo o nombre de pila),
+     "description" (redes_nota o ""), "mime", "size_bytes", "duration_ms", "created_at",
+     "download_url" (firmada 1 h; si la historia tiene edición del editor, **la versión final**
+     que vio el equipo) }] }`
+   - `POST /api/v1/integrations/content/:id/ack` `{ "external_ref": "<asset id>" }` →
+     `redes_status = 'tomada'`, `redes_ref`, `redes_taken_at = now()`. Idempotente.
+
+### Lado Content OS (hecho el 28-09, apagado hasta que Turnos publique la API)
+- Trabajo `ingest:turnos` cada 3 min si están `TURNOS_API_URL` y `CONTENT_OS_SECRET` en el worker.
+- Por cada item: baja el archivo, crea el asset `source = 'turnos'`,
+  `source_external_id = 'story:<id>'` (idempotente), y lo pasa por el circuito de siempre:
+  procesar → Drive → IA (si no hay "¿qué es?", la IA describe lo que ve) → borradores con pieza
+  revisada → Aprobaciones. Después manda el ack.

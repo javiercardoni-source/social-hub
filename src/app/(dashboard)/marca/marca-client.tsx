@@ -174,7 +174,7 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
                 </Button>
               </div>
             )}
-            {m.messages.map((msg, i) => (
+            {m.messages.filter((msg) => msg.content?.trim()).map((msg, i) => (
               <div key={i} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
@@ -186,6 +186,14 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
                 </div>
               </div>
             ))}
+            {!pending && m.status !== "done" && m.messages.filter((msg) => msg.content?.trim()).at(-1)?.role === "user" && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Tu última respuesta quedó guardada pero el Branding Manager no llegó a contestar.
+                <Button size="sm" variant="outline" onClick={() => run(() => turnoEntrevista(m.id, null))}>
+                  Retomar
+                </Button>
+              </div>
+            )}
             {pending && m.messages.length > 0 && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pensando la próxima pregunta…

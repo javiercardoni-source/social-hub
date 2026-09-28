@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/dashboard/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PenSquare, AlertTriangle, Video, Image as ImageIcon, Upload } from "lucide-react"
+import { ArchivoView, BibliotecaTabs } from "./archivo"
 
 export const dynamic = "force-dynamic"
 
@@ -58,21 +59,29 @@ function formatDuration(ms: number | null) {
   return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s}s`
 }
 
-export default async function BibliotecaPage() {
+export default async function BibliotecaPage({ searchParams }: { searchParams: Promise<{ vista?: string; estado?: string; orden?: string }> }) {
   await requireMember("viewer")
   const db = createAdminClient()
-
+  const sp = await searchParams
   const brand = await getActiveBrand()
+
+  // Pestaña Archivo (F2): el material que ya existía, para revisar y elegir.
+  if (sp.vista === "archivo") {
+    return <ArchivoView brandId={brand?.id ?? null} brandName={brand?.name ?? null} estado={sp.estado === "usados" ? "usados" : "pendientes"} orden={sp.orden === "recientes" ? "recientes" : "calidad"} />
+  }
+
   let query = db
     .from("cos_assets")
     .select(
       "id, description, media_type, status, quality_score, thumb_key, consent, size_bytes, duration_ms, submitted_by_label, kitchen_label, created_at, ai_json, cos_brands(name, color, slug)"
     )
     .neq("status", "ARCHIVED")
+    .is("review_status", null)
     .order("created_at", { ascending: false })
     .limit(60)
   if (brand) query = query.eq("brand_id", brand.id)
-  const { data: assets } = await query
+  const { data: assets, error } = await query
+  if (error) throw new Error(`No se pudo cargar la biblioteca: ${error.message}`)
 
   const rows = (assets ?? []) as unknown as AssetRow[]
   const thumbKeys = rows.map((a) => a.thumb_key).filter(Boolean) as string[]
@@ -95,6 +104,7 @@ export default async function BibliotecaPage() {
       </PageHeader>
 
       <div className="p-6">
+        <BibliotecaTabs activa="cocina" />
         {rows.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed text-center">
             <ImageIcon className="h-10 w-10 text-muted-foreground/30" />

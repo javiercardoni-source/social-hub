@@ -60,13 +60,14 @@ export default async function InicioPage() {
     await Promise.all([
       b(db.from("cos_posts").select("*", { count: "exact", head: true }).eq("status", "PENDING_APPROVAL")),
       b(db.from("cos_posts").select("*", { count: "exact", head: true }).in("status", ["SCHEDULED", "APPROVED", "RETRY_SCHEDULED"])),
-      b(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["READY", "IN_USE"])),
-      b(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["NEW", "VALIDATING"])),
+      b(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["READY", "IN_USE"]).is("review_status", null)),
+      b(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["NEW", "VALIDATING"]).is("review_status", null)),
       b(
         db
           .from("cos_assets")
           .select("id, description, status, quality_score, thumb_key, submitted_by_label, created_at, cos_brands(name, color)")
           .neq("status", "ARCHIVED")
+          .is("review_status", null)
           .order("created_at", { ascending: false })
           .limit(8),
       ),

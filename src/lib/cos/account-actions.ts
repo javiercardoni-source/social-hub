@@ -1,5 +1,6 @@
 "use server"
 
+import { aviso } from "@/lib/aviso"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireMember } from "@/lib/cos/auth"
 
@@ -11,5 +12,5 @@ export async function probarConexion() {
     p_payload: {},
     p_dedupe_key: "accounts:check:manual",
   })
-  if (error) throw new Error(`No se pudo pedir la prueba: ${error.message}`)
+  if (error) throw aviso(`No se pudo pedir la prueba: ${error.message}`)
 }

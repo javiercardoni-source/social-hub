@@ -26,10 +26,12 @@ import { driveFromEnv } from "./drive.ts"
 import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
 import { syncAccount } from "./metrics.ts"
 import { contextForBrand, syncContext } from "./context.ts"
+import { ingestTurnos } from "./turnos.ts"
 import { defaultTemplate, type Template } from "./overlay.ts"
 import {
   checkAccount,
   deleteRemote,
+  graphGet,
   findFacebookPost,
   findInstagramPost,
   isTokenError,
@@ -69,9 +71,9 @@ async function must<T>(p: PromiseLike<{ data: T | null; error: { message: string
 
 async function settings(db: SupabaseClient) {
   return must(
-    db.from("cos_settings").select("publish_mode, storage_driver, global_pause, ai_model").eq("id", true).single(),
+    db.from("cos_settings").select("publish_mode, storage_driver, global_pause, ai_model, ai_model_light").eq("id", true).single(),
     "configuración",
-  ) as Promise<{ publish_mode: "simulated" | "live"; storage_driver: string; global_pause: boolean; ai_model: string }>
+  ) as Promise<{ publish_mode: "simulated" | "live"; storage_driver: string; global_pause: boolean; ai_model: string; ai_model_light: string }>
 }
 
 async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
@@ -195,6 +197,9 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
   const s = await settings(db)
   const brand = await brandContext(db, a.brand_id)
   const original = await storageFor(a.storage_driver, db).download(a.storage_key!)
+  // Material de archivo (F2): modelo económico, y la IA escribe la descripción si era provisoria.
+  const { data: extra } = await db.from("cos_assets").select("source, description_by_ai").eq("id", a.id).single()
+  const archivo = extra?.source === "archivo" || extra?.source === "instagram"
 
   const frames = await withTmp(async (dir) => {
     const file = await writeTmp(dir, "original", original)
@@ -203,7 +208,7 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
 
   const c = await classify({
     db,
-    model: s.ai_model,
+    model: archivo ? s.ai_model_light : s.ai_model,
     brand,
     assetId: a.id,
     description: a.description!,
@@ -223,6 +228,8 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
         quality_score: c.quality_score,
         people_present: c.people_present,
         ...(blocked ? { consent: "blocked" } : {}),
+        // Descripción provisoria (nombre de carpeta/archivo): la reemplaza lo que ve la IA.
+        ...(extra?.description_by_ai && c.summary.trim().length >= 15 ? { description: c.summary.trim().slice(0, 500) } : {}),
       })
       .eq("id", a.id)
       .select("id")
@@ -232,17 +239,20 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
   log("asset clasificado", { asset: a.id, quality: c.quality_score, flags: c.risk_flags, blocked })
 
   // Lo que manda la cocina (o se sube a mano) llega a Aprobaciones con el texto ya escrito.
-  if (!blocked) await queue.enqueue("post:draft", { asset_id: a.id }, { dedupeKey: `draft:${a.id}` })
+  // El archivo no: espera a que Javier elija "Usar".
+  if (!blocked && !archivo) await queue.enqueue("post:draft", { asset_id: a.id }, { dedupeKey: `draft:${a.id}` })
 }
 
 // ── post:draft ──────────────────────────────────────────────────────────────
 const draftPost: Handler = async (job, { db, queue, log }) => {
   const assetId = idFrom(job, "asset_id")
   const a = (await must(
-    db.from("cos_assets").select(`${ASSET_COLS}, source, consent, ai_json, duration_ms`).eq("id", assetId).single(),
+    db.from("cos_assets").select(`${ASSET_COLS}, source, consent, ai_json, duration_ms, review_status`).eq("id", assetId).single(),
     "asset",
-  )) as AssetRow & { source: string; consent: string; ai_json: { summary?: string } | null; duration_ms: number | null }
-  if (!["manual", "turnos"].includes(a.source) || a.consent === "blocked" || !a.current_version_id) {
+  )) as AssetRow & { source: string; consent: string; ai_json: { summary?: string } | null; duration_ms: number | null; review_status: string | null }
+  // Borradores: lo que manda la cocina o se sube a mano, y el archivo que Javier eligió "Usar".
+  const permitido = ["manual", "turnos"].includes(a.source) || a.review_status === "approved"
+  if (!permitido || a.consent === "blocked" || !a.current_version_id) {
     log("sin borrador automático para este asset", { asset: a.id, source: a.source, consent: a.consent })
     return
   }
@@ -739,6 +749,75 @@ const syncContextJob: Handler = async (_job, { db, log }) => {
   log("contexto sincronizado", r)
 }
 
+// ── archive:import-ig (F2) ─────────────────────────────────────────────────
+/** Trae en alta calidad una publicación ya hecha en Instagram y la suma al Archivo. */
+const importInstagram: Handler = async (job, { db, queue, log }) => {
+  const mediaId = idFrom(job, "media_id")
+  const { data: m, error } = await db
+    .from("cos_media")
+    .select("id, brand_id, remote_id, format, caption, permalink, posted_at, metrics, cos_social_accounts(token_ref, platform)")
+    .eq("id", mediaId)
+    .single()
+  if (error || !m) throw new PermanentError(`publicación ${mediaId}: ${error?.message ?? "no existe"}`)
+  const acc = m.cos_social_accounts as unknown as { token_ref: string | null; platform: string } | null
+  if (acc?.platform !== "instagram" || m.format === "story") return
+  // Idempotencia: la clave natural es el id de Instagram.
+  const { data: ya } = await db.from("cos_assets").select("id").eq("source", "instagram").eq("source_external_id", m.remote_id).maybeSingle()
+  if (ya) return
+
+  const r = await graphGet<{ media_type?: string; media_url?: string; children?: { data?: { media_type?: string; media_url?: string }[] } }>(
+    m.remote_id,
+    tokenFor(acc.token_ref),
+    { fields: "media_type,media_url,children{media_type,media_url}" },
+  )
+  // Carrusel: se toma la primera pieza (las demás se pueden sumar después si hace falta).
+  const src = r.media_type === "CAROUSEL_ALBUM" ? r.children?.data?.[0] : r
+  if (!src?.media_url) {
+    log("la publicación no tiene archivo descargable (se saltea)", { media: m.id })
+    return
+  }
+  const res = await fetch(src.media_url)
+  if (!res.ok) throw new Error(`descarga ${res.status}`)
+  const data = Buffer.from(await res.arrayBuffer())
+  const isVideo = src.media_type === "VIDEO"
+  const mime = isVideo ? "video/mp4" : "image/jpeg"
+  const { data: brand } = await db.from("cos_brands").select("slug").eq("id", m.brand_id).single()
+  const key = `originals/${brand?.slug ?? "sin-marca"}/instagram/${m.remote_id}.${isVideo ? "mp4" : "jpg"}`
+  await supabaseStorage(db).upload(key, data, mime)
+
+  const fecha = new Date(m.posted_at).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "numeric", month: "short", year: "numeric" })
+  const caption = (m.caption ?? "").replace(/\s+/g, " ").trim()
+  const description = `Publicado en Instagram el ${fecha}${caption ? `: ${caption}` : ""}`.slice(0, 500)
+  const { data: asset, error: ae } = await db
+    .from("cos_assets")
+    .insert({
+      brand_id: m.brand_id,
+      source: "instagram",
+      source_external_id: m.remote_id,
+      description,
+      submitted_by_label: "Archivo de Instagram",
+      mime,
+      size_bytes: data.byteLength,
+      storage_driver: "supabase",
+      storage_key: key,
+      status: "NEW",
+      review_status: "pending",
+      origin_path: m.permalink,
+      origin_media_id: m.id,
+    })
+    .select("id")
+    .single()
+  if (ae || !asset) throw new Error(`asset: ${ae?.message}`)
+  await queue.enqueue("asset:process", { asset_id: asset.id }, { dedupeKey: `process:${asset.id}` })
+  log("importado de Instagram al Archivo", { media: m.id, asset: asset.id })
+}
+
+// ── ingest:turnos (F3) ─────────────────────────────────────────────────────
+const ingestTurnosJob: Handler = async (_job, { db, queue, log }) => {
+  const r = await ingestTurnos(db, queue, log)
+  if (r.tomadas) log("historias de Turnos ingresadas", r)
+}
+
 // ── post:delete ─────────────────────────────────────────────────────────────
 const deletePost: Handler = async (job, { db, log }) => {
   const postId = idFrom(job, "post_id")
@@ -851,5 +930,7 @@ export const handlers: Record<string, Handler> = {
   "post:redo": redoPosts,
   "metrics:sync": syncMetrics,
   "context:sync": syncContextJob,
+  "archive:import-ig": importInstagram,
+  "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,
 }

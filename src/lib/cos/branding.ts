@@ -119,13 +119,21 @@ export async function interviewTurn(opts: {
     brandContext(opts.brand, opts.done),
   ].join("\n")
 
-  // La API exige que la conversación empiece con el usuario.
-  const history: Anthropic.MessageParam[] = [
-    { role: "user", content: `Empecemos el módulo "${m.label}".` },
-    ...opts.messages.map((x) => ({ role: x.role, content: x.content }) as Anthropic.MessageParam),
-  ]
+  // La API exige que la conversación empiece con el usuario, que ningún mensaje venga vacío
+  // y que los roles se alternen: se descartan los vacíos y se juntan los seguidos del mismo rol.
+  const history: Anthropic.MessageParam[] = [{ role: "user", content: `Empecemos el módulo "${m.label}".` }]
+  for (const x of opts.messages) {
+    const content = typeof x.content === "string" ? x.content.trim() : ""
+    if (!content) continue
+    const last = history[history.length - 1]
+    if (last.role === x.role) last.content = `${last.content as string}\n\n${content}`
+    else history.push({ role: x.role, content })
+  }
   if (opts.forzarCierre) {
-    history.push({ role: "user", content: "Cerremos este módulo acá con lo que tenemos. Hacé la síntesis." })
+    const pedido = "Cerremos este módulo acá con lo que tenemos. Hacé la síntesis."
+    const last = history[history.length - 1]
+    if (last.role === "user") last.content = `${last.content as string}\n\n${pedido}`
+    else history.push({ role: "user", content: pedido })
   }
   // Dos turnos seguidos del mismo rol no valen: si el último es del asistente, no hay nada que responder.
   if (history[history.length - 1].role === "assistant") {
@@ -145,8 +153,13 @@ export async function interviewTurn(opts: {
 
   const tool = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "cerrar_modulo")
   if (tool) {
-    const input = tool.input as { sintesis_md: string; mensaje_de_cierre: string }
-    return { reply: input.mensaje_de_cierre, summary: input.sintesis_md }
+    // La IA a veces cierra sin alguno de los dos campos: nunca se guarda una respuesta vacía.
+    const input = (tool.input ?? {}) as { sintesis_md?: string; mensaje_de_cierre?: string }
+    const summary = input.sintesis_md?.trim() || null
+    const reply =
+      input.mensaje_de_cierre?.trim() ||
+      (summary ? "Listo, cierro este módulo con lo que charlamos. Podés leer la síntesis abajo." : "¿Seguimos?")
+    return { reply, summary }
   }
   const text = res.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")

@@ -1,5 +1,6 @@
 "use server"
 
+import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireMember } from "@/lib/cos/auth"
@@ -10,20 +11,20 @@ import { BRAND_MODULE_IDS, type BrandModuleId } from "../../../shared/cos/brand-
 async function contexto() {
   const member = await requireMember("approver")
   const active = await getActiveBrand()
-  if (!active) throw new Error("Elegí una marca arriba a la izquierda")
+  if (!active) throw aviso("Elegí una marca arriba a la izquierda")
   const db = createAdminClient()
   const { data: brand, error } = await db
     .from("cos_brands")
     .select("id, slug, name, tone_md, rules_json, whatsapp_number")
     .eq("id", active.id)
     .single()
-  if (error || !brand) throw new Error("Marca no encontrada")
+  if (error || !brand) throw aviso("Marca no encontrada")
   const { data: rows } = await db.from("cos_brand_interviews").select("module, messages, summary_md, status").eq("brand_id", brand.id)
   return { member, db, brand: brand as BrandRow, rows: rows ?? [] }
 }
 
 function validModule(m: string): BrandModuleId {
-  if (!BRAND_MODULE_IDS.includes(m as BrandModuleId)) throw new Error("Módulo inválido")
+  if (!BRAND_MODULE_IDS.includes(m as BrandModuleId)) throw aviso("Módulo inválido")
   return m as BrandModuleId
 }
 
@@ -35,9 +36,10 @@ export async function turnoEntrevista(moduleId: string, texto: string | null, ce
   const mod = validModule(moduleId)
   const { db, brand, rows } = await contexto()
   const row = rows.find((r) => r.module === mod)
-  if (row?.status === "done" && !cerrar) throw new Error("Este módulo ya está cerrado. Reabrilo para seguir.")
+  if (row?.status === "done" && !cerrar) throw aviso("Este módulo ya está cerrado. Reabrilo para seguir.")
 
-  const messages: ChatMsg[] = [...((row?.messages as ChatMsg[] | undefined) ?? [])]
+  // Los mensajes vacíos (una respuesta de la IA que no llegó) no se guardan ni se reenvían.
+  const messages: ChatMsg[] = ((row?.messages as ChatMsg[] | undefined) ?? []).filter((x) => typeof x.content === "string" && x.content.trim())
   const now = () => new Date().toISOString()
   if (texto?.trim()) messages.push({ role: "user", content: texto.trim().slice(0, 4000), at: now() })
 
@@ -54,7 +56,7 @@ export async function turnoEntrevista(moduleId: string, texto: string | null, ce
     },
     { onConflict: "brand_id,module" },
   )
-  if (error) throw new Error(`No se pudo guardar la entrevista: ${error.message}`)
+  if (error) throw aviso(`No se pudo guardar la entrevista: ${error.message}`)
   revalidatePath("/marca")
   return { closed: !!summary }
 }
@@ -69,17 +71,17 @@ export async function reabrirModulo(moduleId: string) {
 export async function armarBrandbook() {
   const { db, brand, rows, member } = await contexto()
   const done = rows.filter((r) => r.status === "done").map((r) => ({ module: r.module, summary_md: r.summary_md }))
-  if (done.length === 0) throw new Error("Cerrá al menos un módulo de la entrevista antes de armar el brandbook")
+  if (done.length === 0) throw aviso("Cerrá al menos un módulo de la entrevista antes de armar el brandbook")
   const md = await synthesizeBrandbook({ db, brand, done })
   const { error } = await db.from("cos_brands").update({ brandbook_md: md, brandbook_status: "draft" }).eq("id", brand.id)
-  if (error) throw new Error(`No se pudo guardar el brandbook: ${error.message}`)
+  if (error) throw aviso(`No se pudo guardar el brandbook: ${error.message}`)
   await db.from("cos_audit_log").insert({ event: "brandbook:drafted", entity_type: "brand", entity_id: brand.id, actor: member.email ?? member.userId })
   revalidatePath("/marca")
 }
 
 export async function guardarBrandbook(md: string) {
   const { db, brand } = await contexto()
-  if (md.trim().length < 200) throw new Error("El brandbook quedó demasiado corto")
+  if (md.trim().length < 200) throw aviso("El brandbook quedó demasiado corto")
   await db.from("cos_brands").update({ brandbook_md: md.trim(), brandbook_status: "draft" }).eq("id", brand.id)
   revalidatePath("/marca")
 }
@@ -88,7 +90,7 @@ export async function guardarBrandbook(md: string) {
 export async function aprobarBrandbook() {
   const { db, brand, member } = await contexto()
   const { data } = await db.from("cos_brands").select("brandbook_md").eq("id", brand.id).single()
-  if (!data?.brandbook_md) throw new Error("No hay brandbook para aprobar")
+  if (!data?.brandbook_md) throw aviso("No hay brandbook para aprobar")
   const { error } = await db
     .from("cos_brands")
     .update({
@@ -98,7 +100,7 @@ export async function aprobarBrandbook() {
       brandbook_approved_by: member.userId,
     })
     .eq("id", brand.id)
-  if (error) throw new Error(`No se pudo aprobar: ${error.message}`)
+  if (error) throw aviso(`No se pudo aprobar: ${error.message}`)
   await db.from("cos_audit_log").insert({ event: "brandbook:approved", entity_type: "brand", entity_id: brand.id, actor: member.email ?? member.userId })
   revalidatePath("/marca")
 }

@@ -1,5 +1,6 @@
 "use server"
 
+import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
@@ -18,7 +19,7 @@ export async function crearPost(formData: FormData) {
   const scheduledAt = formData.get("scheduled_at") as string | null
 
   if (!assetId || !accountId || !platform || !postType) {
-    throw new Error("Faltan campos requeridos")
+    throw aviso("Faltan campos requeridos")
   }
 
   const db = createAdminClient()
@@ -29,8 +30,8 @@ export async function crearPost(formData: FormData) {
     .select("brand_id, current_version_id")
     .eq("id", assetId)
     .single()
-  if (ae || !asset) throw new Error("Asset no encontrado")
-  if (!asset.current_version_id) throw new Error("El asset no tiene versión procesada todavía")
+  if (ae || !asset) throw aviso("Asset no encontrado")
+  if (!asset.current_version_id) throw aviso("El asset no tiene versión procesada todavía")
 
   // Crear el post en DRAFT
   const { data: post, error: pe } = await db
@@ -48,7 +49,7 @@ export async function crearPost(formData: FormData) {
     })
     .select("id")
     .single()
-  if (pe || !post) throw new Error(`No se pudo crear el post: ${pe?.message}`)
+  if (pe || !post) throw aviso(`No se pudo crear el post: ${pe?.message}`)
 
   // Vincular el asset al post
   const { error: me } = await db.from("cos_post_media").insert({
@@ -56,14 +57,14 @@ export async function crearPost(formData: FormData) {
     version_id: asset.current_version_id,
     position: 0,
   })
-  if (me) throw new Error(`No se pudo vincular el archivo: ${me.message}`)
+  if (me) throw aviso(`No se pudo vincular el archivo: ${me.message}`)
 
   // Pasar a PENDING_APPROVAL de inmediato (la base sella el hash en APPROVED más adelante)
   const { error: te } = await db
     .from("cos_posts")
     .update({ status: "PENDING_APPROVAL" })
     .eq("id", post.id)
-  if (te) throw new Error(`No se pudo enviar a revisión: ${te.message}`)
+  if (te) throw aviso(`No se pudo enviar a revisión: ${te.message}`)
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
@@ -85,14 +86,14 @@ export async function editarPost(
   position: "auto" | "top" | "bottom" = "auto",
 ) {
   await requireMember("editor")
-  if (caption.length + hashtags.length > 2200) throw new Error("El texto supera los 2200 caracteres de Instagram")
-  if (!TEMPLATES.includes(template)) throw new Error("Plantilla inválida")
-  if (!["auto", "top", "bottom"].includes(position)) throw new Error("Posición inválida")
+  if (caption.length + hashtags.length > 2200) throw aviso("El texto supera los 2200 caracteres de Instagram")
+  if (!TEMPLATES.includes(template)) throw aviso("Plantilla inválida")
+  if (!["auto", "top", "bottom"].includes(position)) throw aviso("Posición inválida")
   const db = createAdminClient()
   const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, cos_brands(slug)").eq("id", postId).single()
   const slug = (before?.cos_brands as unknown as { slug: string } | null)?.slug
   // Solo temas de la biblioteca de ESA marca.
-  if (music && !music.startsWith(`music/${slug}/`)) throw new Error("Tema de música inválido")
+  if (music && !music.startsWith(`music/${slug}/`)) throw aviso("Tema de música inválido")
   const visualChanged =
     before?.overlay_text !== overlay.trim() ||
     before?.template !== template ||
@@ -114,8 +115,8 @@ export async function editarPost(
     .eq("id", postId)
     .eq("status", "PENDING_APPROVAL")
     .select("id")
-  if (error) throw new Error(`No se pudo guardar: ${error.message}`)
-  if (!data?.length) throw new Error("Este post ya no está esperando aprobación")
+  if (error) throw aviso(`No se pudo guardar: ${error.message}`)
+  if (!data?.length) throw aviso("Este post ya no está esperando aprobación")
   if (visualChanged) {
     // Sin clave de dedupe: si ya había uno corriendo con el contenido anterior, este arma el nuevo.
     await db.rpc("cos_enqueue_job", { p_type: "post:render", p_payload: { post_id: postId } })
@@ -132,12 +133,12 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
   const db = createAdminClient()
 
   const target = cuando ? new Date(cuando) : null
-  if (target && Number.isNaN(target.getTime())) throw new Error("Fecha inválida")
+  if (target && Number.isNaN(target.getTime())) throw aviso("Fecha inválida")
 
   // Se aprueba lo que se vio: si la pieza final todavía se está armando o revisando, no se aprueba
   // (si no, se publicaría una versión que nadie miró).
   const { data: pieza } = await db.from("cos_posts").select("render_qa").eq("id", postId).single()
-  if (!pieza?.render_qa) throw new Error("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
+  if (!pieza?.render_qa) throw aviso("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
   // "Ya" (o una fecha que está encima) se deja 2 min adelante para que el reloj no lo dé
   // por vencido mientras se aprueba; igual se encola ya mismo (abajo).
   const publishNow = !target || target.getTime() <= Date.now() + 2 * 60_000
@@ -146,21 +147,21 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
     .update({ scheduled_at: publishNow ? new Date(Date.now() + 2 * 60_000).toISOString() : target!.toISOString() })
     .eq("id", postId)
     .eq("status", "PENDING_APPROVAL")
-  if (fe) throw new Error(`No se pudo fijar el horario: ${fe.message}`)
+  if (fe) throw aviso(`No se pudo fijar el horario: ${fe.message}`)
 
   // PENDING_APPROVAL → APPROVED (sella el hash en la base)
   const { error: ae } = await db
     .from("cos_posts")
     .update({ status: "APPROVED", approved_by: member.userId, approved_at: new Date().toISOString() })
     .eq("id", postId)
-  if (ae) throw new Error(`No se pudo aprobar: ${ae.message}`)
+  if (ae) throw aviso(`No se pudo aprobar: ${ae.message}`)
 
   // APPROVED → SCHEDULED (el worker lo publica en scheduled_at)
   const { error: se } = await db
     .from("cos_posts")
     .update({ status: "SCHEDULED" })
     .eq("id", postId)
-  if (se) throw new Error(`No se pudo programar: ${se.message}`)
+  if (se) throw aviso(`No se pudo programar: ${se.message}`)
 
   if (publishNow) {
     // Misma clave que usa el reloj: si él también lo encola, no se duplica.
@@ -169,7 +170,7 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
       p_payload: { post_id: postId },
       p_dedupe_key: `publish:${postId}`,
     })
-    if (je) throw new Error(`Quedó programado pero no se pudo encolar: ${je.message}`)
+    if (je) throw aviso(`Quedó programado pero no se pudo encolar: ${je.message}`)
   }
 
   revalidatePath("/aprobaciones")
@@ -186,7 +187,7 @@ export async function rechazarPost(postId: string, motivo: string) {
     .from("cos_posts")
     .update({ status: "REJECTED", last_error: motivo || "Rechazado" })
     .eq("id", postId)
-  if (error) throw new Error(`No se pudo rechazar: ${error.message}`)
+  if (error) throw aviso(`No se pudo rechazar: ${error.message}`)
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
@@ -202,7 +203,7 @@ export async function cancelarPost(postId: string) {
     .from("cos_posts")
     .update({ status: "CANCELLED" })
     .eq("id", postId)
-  if (error) throw new Error(`No se pudo cancelar: ${error.message}`)
+  if (error) throw aviso(`No se pudo cancelar: ${error.message}`)
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
@@ -220,8 +221,8 @@ export async function volverAAprobacion(postId: string) {
     .eq("id", postId)
     .in("status", ["FAILED", "MISSED", "EXPIRED", "SCHEDULED", "RETRY_SCHEDULED", "PAUSED"])
     .select("id")
-  if (error) throw new Error(`No se pudo devolver a aprobación: ${error.message}`)
-  if (!data?.length) throw new Error("Este post ya no se puede devolver a aprobación")
+  if (error) throw aviso(`No se pudo devolver a aprobación: ${error.message}`)
+  if (!data?.length) throw aviso("Este post ya no se puede devolver a aprobación")
   revalidatePath("/calendar")
   revalidatePath("/aprobaciones")
 }
@@ -238,14 +239,14 @@ export async function pedirBorrado(postId: string) {
     .eq("status", "PUBLISHED")
     .is("deleted_at", null)
     .select("id")
-  if (error) throw new Error(`No se pudo pedir el borrado: ${error.message}`)
-  if (!data?.length) throw new Error("Este post no está publicado o ya se borró")
+  if (error) throw aviso(`No se pudo pedir el borrado: ${error.message}`)
+  if (!data?.length) throw aviso("Este post no está publicado o ya se borró")
   const { error: je } = await db.rpc("cos_enqueue_job", {
     p_type: "post:delete",
     p_payload: { post_id: postId },
     p_dedupe_key: `delete:${postId}`,
   })
-  if (je) throw new Error(`No se pudo encolar el borrado: ${je.message}`)
+  if (je) throw aviso(`No se pudo encolar el borrado: ${je.message}`)
   await db.from("cos_audit_log").insert({ event: "post:delete_requested", entity_type: "post", entity_id: postId, actor: member.email ?? member.userId })
   revalidatePath("/calendar")
 }
@@ -254,11 +255,11 @@ export async function pedirBorrado(postId: string) {
 
 export async function rehacerConIA(postIds: string[], pedido: string, otroDiseno: boolean, otraMusica: boolean) {
   const member = await requireMember("editor")
-  if (!postIds.length) throw new Error("No hay nada para rehacer")
+  if (!postIds.length) throw aviso("No hay nada para rehacer")
   const db = createAdminClient()
   const { data, error } = await db.from("cos_posts").select("id").in("id", postIds).eq("status", "PENDING_APPROVAL")
-  if (error) throw new Error(`No se pudo rehacer: ${error.message}`)
-  if (!data?.length) throw new Error("Estas publicaciones ya no esperan aprobación")
+  if (error) throw aviso(`No se pudo rehacer: ${error.message}`)
+  if (!data?.length) throw aviso("Estas publicaciones ya no esperan aprobación")
   const { error: je } = await db.rpc("cos_enqueue_job", {
     p_type: "post:redo",
     p_payload: {
@@ -269,16 +270,16 @@ export async function rehacerConIA(postIds: string[], pedido: string, otroDiseno
       by: member.email ?? member.userId,
     },
   })
-  if (je) throw new Error(`No se pudo pedir: ${je.message}`)
+  if (je) throw aviso(`No se pudo pedir: ${je.message}`)
 }
 
 // ── fechas especiales propias (F4) ───────────────────────────────────────────
 
 export async function agregarFecha(input: { day: string; name: string; brandId: string | null; hint: string }) {
   const member = await requireMember("editor")
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.day)) throw new Error("Fecha inválida")
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.day)) throw aviso("Fecha inválida")
   const name = input.name.trim()
-  if (name.length < 2 || name.length > 80) throw new Error("El nombre tiene que tener entre 2 y 80 caracteres")
+  if (name.length < 2 || name.length > 80) throw aviso("El nombre tiene que tener entre 2 y 80 caracteres")
   const db = createAdminClient()
   const { error } = await db.from("cos_special_days").insert({
     day: input.day,
@@ -289,7 +290,7 @@ export async function agregarFecha(input: { day: string; name: string; brandId: 
     hint: input.hint.trim().slice(0, 300) || null,
     created_by: member.userId,
   })
-  if (error) throw new Error(/duplicate|unique/i.test(error.message) ? "Esa fecha ya está cargada" : `No se pudo guardar: ${error.message}`)
+  if (error) throw aviso(/duplicate|unique/i.test(error.message) ? "Esa fecha ya está cargada" : `No se pudo guardar: ${error.message}`)
   revalidatePath("/calendar")
 }
 
@@ -298,7 +299,64 @@ export async function borrarFecha(id: string) {
   const db = createAdminClient()
   // Solo las cargadas a mano: los feriados y las fechas curadas se mantienen solos.
   const { data, error } = await db.from("cos_special_days").delete().eq("id", id).eq("source", "manual").select("id")
-  if (error) throw new Error(`No se pudo borrar: ${error.message}`)
-  if (!data?.length) throw new Error("Solo se pueden borrar las fechas cargadas a mano")
+  if (error) throw aviso(`No se pudo borrar: ${error.message}`)
+  if (!data?.length) throw aviso("Solo se pueden borrar las fechas cargadas a mano")
   revalidatePath("/calendar")
+}
+
+// ── Archivo (F2) ─────────────────────────────────────────────────────────────
+
+/** "Usar": el material de archivo pasa a la cocina de posts (la IA arma los borradores). */
+export async function usarDelArchivo(assetId: string) {
+  await requireMember("editor")
+  const db = createAdminClient()
+  const { data, error } = await db
+    .from("cos_assets")
+    .update({ review_status: "approved" })
+    .eq("id", assetId)
+    .in("review_status", ["pending", "approved"])
+    .in("status", ["READY", "IN_USE"])
+    .select("id")
+  if (error) throw aviso(`No se pudo marcar: ${error.message}`)
+  if (!data?.length) throw aviso("Todavía se está analizando: probá en un rato")
+  const { error: je } = await db.rpc("cos_enqueue_job", { p_type: "post:draft", p_payload: { asset_id: assetId }, p_dedupe_key: `draft:${assetId}` })
+  if (je) throw aviso(`No se pudo pedir los borradores: ${je.message}`)
+  revalidatePath("/media")
+}
+
+export async function descartarDelArchivo(assetId: string) {
+  await requireMember("editor")
+  const db = createAdminClient()
+  const { error } = await db.from("cos_assets").update({ review_status: "discarded", status: "ARCHIVED" }).eq("id", assetId).not("review_status", "is", null)
+  if (error) throw aviso(`No se pudo descartar: ${error.message}`)
+  revalidatePath("/media")
+}
+
+/** Trae al Archivo lo publicado en Instagram de una marca (de a poco: uno cada 20 s). */
+export async function importarInstagram(brandId: string) {
+  await requireMember("approver")
+  const db = createAdminClient()
+  const { data: media, error } = await db
+    .from("cos_media")
+    .select("id, remote_id")
+    .eq("brand_id", brandId)
+    .eq("platform", "instagram")
+    .neq("format", "story")
+    .order("posted_at", { ascending: false })
+  if (error) throw aviso(`No se pudo leer lo publicado: ${error.message}`)
+  const { data: ya } = await db.from("cos_assets").select("source_external_id").eq("brand_id", brandId).eq("source", "instagram")
+  const tengo = new Set((ya ?? []).map((a) => a.source_external_id))
+  const faltan = (media ?? []).filter((m) => !tengo.has(m.remote_id))
+  let at = Date.now()
+  for (const m of faltan) {
+    at += 20_000
+    await db.rpc("cos_enqueue_job", {
+      p_type: "archive:import-ig",
+      p_payload: { media_id: m.id },
+      p_run_at: new Date(at).toISOString(),
+      p_dedupe_key: `import-ig:${m.id}`,
+    })
+  }
+  revalidatePath("/media")
+  return { encolados: faltan.length, minutos: Math.ceil((faltan.length * 20) / 60) }
 }

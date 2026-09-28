@@ -17,7 +17,7 @@ export async function Sidebar() {
   const [brandsResult, pendingResult, mediaResult, settingsResult] = await Promise.all([
     db.from("cos_brands").select("id, name, slug, color").eq("active", true).order("name"),
     byBrand(db.from("cos_posts").select("*", { count: "exact", head: true }).eq("status", "PENDING_APPROVAL")),
-    byBrand(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["NEW", "VALIDATING", "READY"])),
+    byBrand(db.from("cos_assets").select("*", { count: "exact", head: true }).in("status", ["NEW", "VALIDATING", "READY"]).is("review_status", null)),
     db.from("cos_settings").select("global_pause, publish_mode").eq("id", true).single(),
   ])
 

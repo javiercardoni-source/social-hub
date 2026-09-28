@@ -1,5 +1,6 @@
 "use server"
 
+import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireMember } from "@/lib/cos/auth"
@@ -12,7 +13,7 @@ export async function cambiarPausa(pausar: boolean) {
     .from("cos_settings")
     .update({ global_pause: pausar, updated_by: member.userId })
     .eq("id", true)
-  if (error) throw new Error(`No se pudo cambiar la pausa: ${error.message}`)
+  if (error) throw aviso(`No se pudo cambiar la pausa: ${error.message}`)
   await db.from("cos_audit_log").insert({
     event: pausar ? "settings:pause_on" : "settings:pause_off",
     entity_type: "settings",
