@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { LogOut, User as UserIcon } from "lucide-react"
+import Link from "next/link"
+import { LogOut, Palette, User as UserIcon } from "lucide-react"
 import { logout } from "@/app/login/actions"
 
 export async function UserMenu() {
@@ -38,9 +39,17 @@ export async function UserMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled>
-          <UserIcon className="h-4 w-4" />
-          Perfil
+        <DropdownMenuItem asChild>
+          <Link href="/marca" className="cursor-pointer">
+            <Palette className="h-4 w-4" />
+            Marca (Branding Manager)
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/accounts" className="cursor-pointer">
+            <UserIcon className="h-4 w-4" />
+            Cuentas conectadas
+          </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <form action={logout}>

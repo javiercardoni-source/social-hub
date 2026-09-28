@@ -17,7 +17,7 @@ describe("estados de un post", () => {
     const db = await freshDb()
     const r = await db.query<{ def: string }>(
       `select pg_get_constraintdef(c.oid) as def from pg_constraint c
-       where c.conrelid = 'cos_posts'::regclass and c.contype = 'c' and pg_get_constraintdef(c.oid) like '%status%'`,
+       where c.conrelid = 'cos_posts'::regclass and c.contype = 'c' and c.conname = 'cos_posts_status_check'`,
     )
     const enBase = [...r.rows[0].def.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort()
     expect([...POST_STATUSES].sort()).toEqual(enBase)

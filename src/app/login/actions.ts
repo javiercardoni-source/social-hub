@@ -1,7 +1,6 @@
 "use server"
 
 import { redirect } from "next/navigation"
-import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 
 export async function login(formData: FormData) {
@@ -19,13 +18,11 @@ export async function login(formData: FormData) {
     return { error: "Email o contraseña incorrectos" }
   }
 
-  revalidatePath("/", "layout")
-  redirect("/")
+  redirect("/inicio")
 }
 
 export async function logout() {
   const supabase = await createClient()
   await supabase.auth.signOut()
-  revalidatePath("/", "layout")
   redirect("/login")
 }

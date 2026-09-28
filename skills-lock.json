@@ -1,11 +1,23 @@
 {
   "version": 1,
   "skills": {
+    "brand-discovery": {
+      "source": "affaan-m/ecc",
+      "sourceType": "github",
+      "skillPath": "skills/brand-discovery/SKILL.md",
+      "computedHash": "e9e5bba6b38ba0f9a7206d760c0469a6bac56629c2a68d0cadbc618442df0518"
+    },
     "ffmpeg": {
       "source": "digitalsamba/claude-code-video-toolkit",
       "sourceType": "github",
       "skillPath": ".claude/skills/ffmpeg/SKILL.md",
       "computedHash": "51fa05bc18bb2691e622aefd1d8ec6d4d96a9e9c44cdf599003c9d6003d11a07"
+    },
+    "hyperframes": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/hyperframes/SKILL.md",
+      "computedHash": "09089ddf58bb5b2db998f795407e6804c4593bb416b5b8c69dd8086100fe7df6"
     },
     "pick-ui-library": {
       "source": "emilkowalski/skills",

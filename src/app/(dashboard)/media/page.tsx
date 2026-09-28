@@ -3,10 +3,11 @@ import Image from "next/image"
 import { requireMember } from "@/lib/cos/auth"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { signedUrls } from "@/lib/cos/storage"
+import { getActiveBrand } from "@/lib/cos/brand"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { PenSquare, AlertTriangle, Video, Image as ImageIcon } from "lucide-react"
+import { PenSquare, AlertTriangle, Video, Image as ImageIcon, Upload } from "lucide-react"
 
 export const dynamic = "force-dynamic"
 
@@ -61,13 +62,17 @@ export default async function BibliotecaPage() {
   await requireMember("viewer")
   const db = createAdminClient()
 
-  const { data: assets } = await db
+  const brand = await getActiveBrand()
+  let query = db
     .from("cos_assets")
     .select(
       "id, description, media_type, status, quality_score, thumb_key, consent, size_bytes, duration_ms, submitted_by_label, kitchen_label, created_at, ai_json, cos_brands(name, color, slug)"
     )
+    .neq("status", "ARCHIVED")
     .order("created_at", { ascending: false })
     .limit(60)
+  if (brand) query = query.eq("brand_id", brand.id)
+  const { data: assets } = await query
 
   const rows = (assets ?? []) as unknown as AssetRow[]
   const thumbKeys = rows.map((a) => a.thumb_key).filter(Boolean) as string[]
@@ -79,8 +84,15 @@ export default async function BibliotecaPage() {
     <>
       <PageHeader
         title="Biblioteca"
-        description={`${rows.length} archivos · ${readyCount} listos para publicar`}
-      />
+        description={`${brand ? `${brand.name} · ` : ""}${rows.length} archivos · ${readyCount} listos para publicar`}
+      >
+        <Button asChild size="sm" className="font-semibold">
+          <Link href="/media/subir">
+            <Upload className="h-4 w-4" />
+            Subir
+          </Link>
+        </Button>
+      </PageHeader>
 
       <div className="p-6">
         {rows.length === 0 ? (

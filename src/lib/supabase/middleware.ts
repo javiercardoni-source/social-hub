@@ -10,8 +10,20 @@ import { NextResponse, type NextRequest } from "next/server"
  *                        redirigiera a /login, Meta daría de baja el webhook.
  *                        Se protege con la firma X-Hub-Signature-256, no con sesión.
  *  - /r/                 links cortos de «Comentá y te escribo» (los abre cualquiera)
+ *  - /privacidad         política pública que exigen Google y Meta para sus apps
+ *  - /manifest…, /icon…  para poder instalarla como app en el celular (el teléfono los pide sin sesión)
  */
-export const PUBLIC_PREFIXES = ["/login", "/sin-acceso", "/api/health", "/api/webhooks/", "/r/"] as const
+export const PUBLIC_PREFIXES = [
+  "/login",
+  "/sin-acceso",
+  "/api/health",
+  "/api/webhooks/",
+  "/r/",
+  "/privacidad",
+  "/manifest.webmanifest",
+  "/icon",
+  "/apple-icon",
+] as const
 
 export function isPublicPath(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p.endsWith("/") ? p : `${p}/`))

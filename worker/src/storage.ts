@@ -1,11 +1,14 @@
 /**
  * Almacenamiento de medios (PLAN §8). Dos implementaciones detrás de la misma interfaz:
- *   · supabase — bucket privado `cos-media` (modo simulación, y miniaturas siempre)
- *   · drive    — la cuenta dedicada por OAuth con drive.file. Se escribe el día de la
- *                conexión, cuando se pueda probar contra Drive de verdad.
+ *   · supabase — bucket privado `cos-media`: copia de trabajo y miniaturas
+ *   · drive    — archivo maestro en la cuenta dedicada (drive.file), ver drive.ts
+ *
+ * Meta necesita una URL pública para bajar cada archivo: se usa una URL firmada de
+ * cos-media que vence en 1 h, generada de nuevo en cada intento (PLAN §9.4).
  */
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError } from "./queue.ts"
+import { driveFromEnv } from "./drive.ts"
 
 export const MEDIA_BUCKET = "cos-media"
 
@@ -41,10 +44,24 @@ export function supabaseStorage(db: SupabaseClient): MediaStorage {
   }
 }
 
+/** Solo lectura: en Drive la "key" es el id del archivo. Se escribe con drive.ts (archivar). */
+function driveStorage(): MediaStorage {
+  const drive = driveFromEnv()
+  if (!drive) throw new PermanentError("Drive no está configurado en el servidor (GOOGLE_DRIVE_*)")
+  return {
+    driver: "drive",
+    download: (fileId) => drive.download(fileId),
+    upload() {
+      throw new PermanentError("para guardar en Drive se usa el trabajo asset:archive")
+    },
+    signedUrl() {
+      throw new PermanentError("Drive no da URLs públicas: se pasa por cos-media (staging)")
+    },
+  }
+}
+
 export function storageFor(driver: string | null | undefined, db: SupabaseClient): MediaStorage {
   if (!driver || driver === "supabase") return supabaseStorage(db)
-  if (driver === "drive") {
-    throw new PermanentError("Drive todavía no está conectado (se conecta al final, ver PLAN §8)")
-  }
+  if (driver === "drive") return driveStorage()
   throw new PermanentError(`almacenamiento desconocido: ${driver}`)
 }

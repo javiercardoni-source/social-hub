@@ -4,18 +4,40 @@
  *
  *   asset:process   bajar → ffprobe → miniatura → versión original → READY → encola clasificar
  *   asset:classify  fotogramas → Claude → etiquetas, calidad, alertas (y bloqueo por consentimiento)
- *   post:publish    SCHEDULED/RETRY → PUBLISHING → PUBLISHED (simulado o real)
+ *   asset:archive   copia el original al Drive (archivo maestro), sin duplicar
+ *   post:draft      la IA escribe el texto y deja el post esperando aprobación
+ *   post:redo       rehace con la IA texto/frase (y opcionalmente plantilla o tema) de una subida
+ *   post:delete     borra de la red un post publicado (Facebook sí; Instagram si Meta lo permite)
+ *   post:render     arma la pieza final (encuadre + plantilla de marca) que se aprueba y se publica
+ *   post:publish    SCHEDULED/RETRY → PUBLISHING → PUBLISHED (simulado o real en Meta)
  *   post:reconcile  un post que quedó "publicando" cuando el worker se cayó
+ *   accounts:check  prueba el token de cada cuenta y la marca conectada o con error
  *
  * Un manejador tira PermanentError si reintentar no sirve; cualquier otro error vuelve
  * a la cola con espera creciente (la calcula la base).
  */
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
-import { storageFor, supabaseStorage } from "./storage.ts"
-import { framesForAi, probe, sha256, thumbnail, withTmp, writeTmp } from "./media.ts"
-import { classify } from "./ai.ts"
+import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
+import { fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, withTmp, writeTmp } from "./media.ts"
+import { classify, writeCaption } from "./ai.ts"
+import { driveFromEnv } from "./drive.ts"
+import { ensureRender, loadRenderPost, renderKey } from "./render.ts"
+import { defaultTemplate, type Template } from "./overlay.ts"
+import {
+  checkAccount,
+  deleteRemote,
+  findFacebookPost,
+  findInstagramPost,
+  isTokenError,
+  publishFacebook,
+  publishInstagram,
+  tokenFor,
+  type MediaItem,
+  type PostType,
+} from "./meta.ts"
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
+import { fullCaption } from "../../shared/cos/caption.ts"
 
 export type HandlerContext = {
   db: SupabaseClient
@@ -155,11 +177,12 @@ const processAsset: Handler = async (job, { db, queue, log }) => {
     "asset",
   )
   await queue.enqueue("asset:classify", { asset_id: a.id }, { dedupeKey: `classify:${a.id}` })
+  if (driveFromEnv()) await queue.enqueue("asset:archive", { asset_id: a.id }, { dedupeKey: `archive:${a.id}` })
   log("asset listo", { asset: a.id, type: meta.info.mediaType, w: meta.info.width, h: meta.info.height })
 }
 
 // ── asset:classify ──────────────────────────────────────────────────────────
-const classifyAsset: Handler = async (job, { db, log }) => {
+const classifyAsset: Handler = async (job, { db, queue, log }) => {
   const assetId = idFrom(job, "asset_id")
   const a = (await must(db.from("cos_assets").select(ASSET_COLS).eq("id", assetId).single(), "asset")) as AssetRow
   if (!["READY", "IN_USE"].includes(a.status)) {
@@ -204,22 +227,256 @@ const classifyAsset: Handler = async (job, { db, log }) => {
     "asset",
   )
   log("asset clasificado", { asset: a.id, quality: c.quality_score, flags: c.risk_flags, blocked })
+
+  // Lo que manda la cocina (o se sube a mano) llega a Aprobaciones con el texto ya escrito.
+  if (!blocked) await queue.enqueue("post:draft", { asset_id: a.id }, { dedupeKey: `draft:${a.id}` })
+}
+
+// ── post:draft ──────────────────────────────────────────────────────────────
+const draftPost: Handler = async (job, { db, queue, log }) => {
+  const assetId = idFrom(job, "asset_id")
+  const a = (await must(
+    db.from("cos_assets").select(`${ASSET_COLS}, source, consent, ai_json, duration_ms`).eq("id", assetId).single(),
+    "asset",
+  )) as AssetRow & { source: string; consent: string; ai_json: { summary?: string } | null; duration_ms: number | null }
+  if (!["manual", "turnos"].includes(a.source) || a.consent === "blocked" || !a.current_version_id) {
+    log("sin borrador automático para este asset", { asset: a.id, source: a.source, consent: a.consent })
+    return
+  }
+  // Idempotencia: si ya hay posts vivos con este archivo, no se arman otros.
+  const { data: existing } = await db
+    .from("cos_post_media")
+    .select("cos_posts!inner(status)")
+    .eq("version_id", a.current_version_id)
+    .not("cos_posts.status", "in", "(CANCELLED,REJECTED)")
+  if (existing?.length) return
+
+  const { data: accounts } = await db
+    .from("cos_social_accounts")
+    .select("id, platform")
+    .eq("brand_id", a.brand_id)
+    .in("platform", ["instagram", "facebook"])
+    .neq("status", "disabled")
+  const ig = accounts?.find((x) => x.platform === "instagram")
+  const fb = accounts?.find((x) => x.platform === "facebook")
+  if (!ig && !fb) {
+    log("la marca no tiene cuentas conectadas: sin borrador", { asset: a.id })
+    return
+  }
+
+  const s = await settings(db)
+  const isVideo = a.media_type === "video"
+  const c = await writeCaption({
+    db,
+    model: s.ai_model,
+    brand: await brandContext(db, a.brand_id),
+    assetId: a.id,
+    platform: "instagram",
+    postType: isVideo ? "reel" : "feed",
+    description: a.description ?? "",
+    aiSummary: a.ai_json?.summary ?? "",
+  })
+  const caption = `${c.hook.trim()}\n${c.caption.trim()}`
+  const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+
+  // Un borrador por formato: se aprueban (o rechazan) por separado. La historia va sin texto.
+  const brandSlug = (await brandContext(db, a.brand_id)).slug
+  const overlay = c.overlay.replace(/[#\p{Extended_Pictographic}]/gu, "").trim().slice(0, 60)
+  const template = defaultTemplate(brandSlug)
+  // Foto + biblioteca de música de la marca → todo sale con música: en Instagram va como reel
+  // (que también aparece en el feed) en vez de post de foto, porque Meta no deja música en fotos.
+  const music = await listMusic(db, brandSlug)
+  const pick = music.length ? music[Math.floor(Math.random() * music.length)] : null
+  const withMusic = !isVideo && !!pick
+  const formats: { account: string; platform: string; post_type: PostType; caption: string; hashtags: string }[] = []
+  if (ig) {
+    // Foto: siempre el post de foto (sin música: la API no lo permite). Con biblioteca de música,
+    // además el reel con música; se pueden publicar en momentos distintos.
+    formats.push({ account: ig.id, platform: "instagram", post_type: isVideo ? "reel" : "feed", caption, hashtags })
+    if (withMusic) formats.push({ account: ig.id, platform: "instagram", post_type: "reel", caption, hashtags })
+    // Instagram no acepta historias de más de 60 s.
+    const longVideo = isVideo && (a.duration_ms ?? 0) > 60_000
+    if (!longVideo) formats.push({ account: ig.id, platform: "instagram", post_type: "story", caption: "", hashtags: "" })
+  }
+  if (fb) formats.push({ account: fb.id, platform: "facebook", post_type: "feed", caption, hashtags })
+
+
+  const created: string[] = []
+  for (const f of formats) {
+    const post = (await must(
+      db
+        .from("cos_posts")
+        .insert({
+          brand_id: a.brand_id,
+          account_id: f.account,
+          platform: f.platform,
+          post_type: f.post_type,
+          caption: f.caption,
+          hashtags: f.hashtags,
+          overlay_text: overlay,
+          template,
+          music_key: withMusic && !(f.platform === "instagram" && f.post_type === "feed") ? pick : null,
+          status: "DRAFT",
+        })
+        .select("id")
+        .single(),
+      "post",
+    )) as { id: string }
+    await must(
+      db.from("cos_post_media").insert({ post_id: post.id, version_id: a.current_version_id, position: 0 }).select("post_id").single(),
+      "archivo del post",
+    )
+    await setPost(db, post.id, { status: "PENDING_APPROVAL" })
+    await queue.enqueue("post:render", { post_id: post.id }, { dedupeKey: `render:${post.id}` })
+    created.push(`${f.platform}:${f.post_type}`)
+  }
+  await db.from("cos_audit_log").insert({
+    event: "post:drafted",
+    entity_type: "asset",
+    entity_id: a.id,
+    actor: "worker",
+    details_json: { formats: created, rationale: c.rationale },
+  })
+  log("borradores listos para aprobar", { asset: a.id, formats: created })
+}
+
+// ── biblioteca de música (cos-media/music/<marca>/, la carga scripts/musica-subir.mjs) ──
+async function listMusic(db: SupabaseClient, slug: string): Promise<string[]> {
+  const { data } = await db.storage.from(MEDIA_BUCKET).list(`music/${slug}`, { limit: 100 })
+  return (data ?? []).filter((f) => /\.(mp3|m4a|wav|aac)$/i.test(f.name)).map((f) => `music/${slug}/${f.name}`)
+}
+
+// ── asset:archive ───────────────────────────────────────────────────────────
+const EXT: Record<string, string> = {
+  "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic",
+  "video/mp4": "mp4", "video/quicktime": "mov",
+}
+
+const archiveAsset: Handler = async (job, { db, log }) => {
+  const drive = driveFromEnv()
+  if (!drive) throw new PermanentError("Drive no está configurado en el servidor")
+  const assetId = idFrom(job, "asset_id")
+  const a = (await must(
+    db.from("cos_assets").select(`${ASSET_COLS}, drive_file_id, created_at, cos_brands(slug)`).eq("id", assetId).single(),
+    "asset",
+  )) as AssetRow & { drive_file_id: string | null; created_at: string; cos_brands: { slug: string } | null }
+  if (a.drive_file_id) return
+  if (!a.storage_key) throw new PermanentError("el asset no tiene archivo")
+
+  // Si un intento anterior lo subió pero no llegó a guardar el id, se adopta ese archivo.
+  let file = await drive.findByAsset(a.id)
+  if (!file) {
+    const data = await storageFor(a.storage_driver, db).download(a.storage_key)
+    const mime = a.mime ?? "application/octet-stream"
+    const month = a.created_at.slice(0, 7)
+    file = await drive.upload({
+      folderPath: ["10_ORIGINALS", a.cos_brands?.slug ?? "sin-marca", month],
+      name: `${a.created_at.slice(0, 10)}_${a.id.slice(0, 8)}.${EXT[mime] ?? "bin"}`,
+      mime,
+      data,
+      appProperties: { cos_asset_id: a.id },
+    })
+  }
+  await must(
+    db.from("cos_assets").update({ drive_file_id: file.id, drive_md5: file.md5Checksum ?? null }).eq("id", a.id).select("id").single(),
+    "asset",
+  )
+  log("original archivado en Drive", { asset: a.id, drive: file.id })
 }
 
 // ── post:publish ────────────────────────────────────────────────────────────
-type PostRow = { id: string; status: string; attempts: number; platform: string; post_type: string }
+type PostRow = {
+  id: string
+  status: string
+  attempts: number
+  platform: string
+  post_type: PostType
+  caption: string
+  hashtags: string
+  remote_container_id: string | null
+  remote_post_id: string | null
+  updated_at: string
+  cos_social_accounts: { id: string; external_id: string; token_ref: string | null } | null
+}
+const POST_COLS =
+  "id, status, attempts, platform, post_type, caption, hashtags, remote_container_id, remote_post_id, updated_at, cos_social_accounts(id, external_id, token_ref)"
 
 async function setPost(db: SupabaseClient, id: string, patch: Record<string, unknown>) {
   const { error } = await db.from("cos_posts").update(patch).eq("id", id)
   if (error) throw new Error(`post ${id}: ${error.message}`)
 }
 
-const publishPost: Handler = async (job, { db, log }) => {
+async function loadPost(db: SupabaseClient, id: string): Promise<PostRow> {
+  return (await must(db.from("cos_posts").select(POST_COLS).eq("id", id).single(), "post")) as unknown as PostRow
+}
+
+type VersionRow = { id: string; storage_driver: string; storage_key: string | null; drive_file_id: string | null; mime: string | null }
+
+/**
+ * URL pública (1 h) de cada archivo del post, en orden. Las fotos que no son JPEG se
+ * convierten, y lo que vive solo en Drive se copia a cos-media/staging (Meta necesita
+ * poder bajarlo por HTTP).
+ */
+async function mediaUrls(
+  db: SupabaseClient,
+  postId: string,
+  attempt: number,
+  target: { platform: string; postType: PostType },
+): Promise<{ items: MediaItem[]; staged: string[] }> {
+  // El feed de Instagram exige proporción entre 4:5 y 1,91:1, y la historia 9:16: esas fotos
+  // siempre pasan por ajuste (sin recortar: se completa con fondo desenfocado).
+  const igFeed = target.platform === "instagram" && (target.postType === "feed" || target.postType === "carousel")
+  const story = target.postType === "story"
+  const rows = (await must(
+    db
+      .from("cos_post_media")
+      .select("position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime)")
+      .eq("post_id", postId)
+      .order("position"),
+    "archivos del post",
+  )) as unknown as { position: number; cos_asset_versions: VersionRow }[]
+  if (rows.length === 0) throw new PermanentError("el post no tiene archivos")
+
+  const media = supabaseStorage(db)
+  const items: MediaItem[] = []
+  const staged: string[] = []
+  for (const { position, cos_asset_versions: v } of rows) {
+    const kind = v.mime?.startsWith("video/") ? "video" : "photo"
+    const onSupabase = v.storage_driver === "supabase" && v.storage_key
+    const isJpeg = v.mime === "image/jpeg"
+    if (onSupabase && (kind === "video" || (isJpeg && !igFeed && !story))) {
+      items.push({ kind, url: await media.signedUrl(v.storage_key!, 3600) })
+      continue
+    }
+    const original = onSupabase
+      ? await media.download(v.storage_key!)
+      : await storageFor("drive", db).download(v.drive_file_id ?? v.storage_key!)
+    const data =
+      kind !== "photo"
+        ? original
+        : await withTmp(async (dir) => {
+            const f = await writeTmp(dir, "in", original)
+            return story ? fitForStory(f, dir) : igFeed ? fitForInstagramFeed(f, dir) : isJpeg ? original : toJpeg(f, dir)
+          })
+    const ext = kind === "photo" ? "jpg" : (EXT[v.mime ?? ""] ?? "mp4")
+    const key = `staging/${postId}/${attempt}-${position}.${ext}`
+    await media.upload(key, data, kind === "photo" ? "image/jpeg" : (v.mime ?? "video/mp4"))
+    staged.push(key)
+    items.push({ kind, url: await media.signedUrl(key, 3600) })
+  }
+  return { items, staged }
+}
+
+async function markAccount(db: SupabaseClient, accountId: string, ok: boolean, error: string | null) {
+  await db
+    .from("cos_social_accounts")
+    .update({ status: ok ? "connected" : "error", last_error: error, last_checked_at: new Date().toISOString() })
+    .eq("id", accountId)
+}
+
+const publishPost: Handler = async (job, { db, log, signal }) => {
   const postId = idFrom(job, "post_id")
-  const p = (await must(
-    db.from("cos_posts").select("id, status, attempts, platform, post_type").eq("id", postId).single(),
-    "post",
-  )) as PostRow
+  const p = await loadPost(db, postId)
   // Idempotencia: solo se publica desde estos dos estados. Cualquier otro = ya se resolvió.
   if (!["SCHEDULED", "RETRY_SCHEDULED"].includes(p.status)) {
     log("post no está para publicar, nada que hacer", { post: p.id, status: p.status })
@@ -234,9 +491,10 @@ const publishPost: Handler = async (job, { db, log }) => {
   // La base verifica acá que el contenido sea EXACTAMENTE el aprobado (y el consentimiento).
   // Si lo rechaza, no tiene sentido reintentar: vuelve a aprobación con el motivo a la vista
   // (si no, el reloj lo volvería a encolar cada minuto).
+  const attempt = p.attempts + 1
   const { error: toPublishing } = await db
     .from("cos_posts")
-    .update({ status: "PUBLISHING", attempts: p.attempts + 1, last_error: null })
+    .update({ status: "PUBLISHING", attempts: attempt, last_error: null })
     .eq("id", p.id)
   if (toPublishing) {
     await setPost(db, p.id, { status: "PENDING_APPROVAL", last_error: `No se pudo publicar: ${toPublishing.message}` })
@@ -244,6 +502,8 @@ const publishPost: Handler = async (job, { db, log }) => {
     return
   }
 
+  const account = p.cos_social_accounts
+  let staged: string[] = []
   try {
     if (s.publish_mode === "simulated") {
       await new Promise((r) => setTimeout(r, 800))
@@ -256,11 +516,54 @@ const publishPost: Handler = async (job, { db, log }) => {
       log("publicado (SIMULADO: no salió a Meta)", { post: p.id })
       return
     }
-    // El publicador real de Meta se escribe el día de la conexión (PLAN §9.4).
-    throw new PermanentError("publicación real todavía no conectada (publish_mode = live sin adaptador de Meta)")
+
+    if (!account) throw new PermanentError("el post no tiene cuenta asignada")
+    const token = tokenFor(account.token_ref)
+    const caption = fullCaption(p.caption, p.hashtags)
+    // Posts de un solo archivo: se publica la pieza final (la misma que se vio al aprobar).
+    let prepared: { items: MediaItem[]; staged: string[] }
+    const rp = p.post_type === "carousel" ? null : await loadRenderPost(db, p.id)
+    const key = rp ? await ensureRender(db, rp) : null
+    if (rp && key) {
+      const kind = key.endsWith(".mp4") ? "video" : "photo"
+      prepared = { items: [{ kind, url: await supabaseStorage(db).signedUrl(key, 3600) }], staged: [] }
+    } else {
+      prepared = await mediaUrls(db, p.id, attempt, { platform: p.platform, postType: p.post_type })
+    }
+    staged = prepared.staged
+
+    const result =
+      p.platform === "instagram"
+        ? await publishInstagram({
+            igUserId: account.external_id,
+            token,
+            type: p.post_type,
+            caption,
+            media: prepared.items,
+            existingContainerId: p.remote_container_id,
+            saveContainer: (id) => setPost(db, p.id, { remote_container_id: id }),
+            signal,
+          })
+        : p.platform === "facebook"
+          ? await publishFacebook({ pageId: account.external_id, token, type: p.post_type, caption, media: prepared.items })
+          : (() => {
+              throw new PermanentError(`${p.platform} todavía no está soportado`)
+            })()
+
+    // El id se guarda apenas se tiene: es lo que impide publicar dos veces.
+    await setPost(db, p.id, {
+      status: "PUBLISHED",
+      simulated: false,
+      remote_post_id: result.remoteId,
+      permalink: result.permalink,
+      published_at: new Date().toISOString(),
+    })
+    await markAccount(db, account.id, true, null)
+    log("PUBLICADO en Meta", { post: p.id, platform: p.platform, remote: result.remoteId, permalink: result.permalink })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    const permanent = e instanceof PermanentError || p.attempts + 1 >= MAX_POST_ATTEMPTS
+    if (account && isTokenError(e)) await markAccount(db, account.id, false, message)
+    const permanent = e instanceof PermanentError || attempt >= MAX_POST_ATTEMPTS
     await setPost(db, p.id, { status: "FAILED", last_error: message })
     if (!permanent) {
       const waitMin = 2 ** p.attempts // 1, 2, 4, 8 minutos
@@ -270,24 +573,211 @@ const publishPost: Handler = async (job, { db, log }) => {
       })
     }
     log("la publicación falló", { post: p.id, permanent, error: message })
+  } finally {
+    // Las copias temporales para Meta ya no hacen falta (el original sigue guardado).
+    if (staged.length) {
+      const { error: rmErr } = await db.storage.from(MEDIA_BUCKET).remove(staged)
+      if (rmErr) log("no se pudieron borrar las copias temporales", { post: p.id, files: staged, error: rmErr.message })
+    }
+  }
+}
+
+// ── post:render ─────────────────────────────────────────────────────────────
+const renderPost: Handler = async (job, { db, log }) => {
+  const postId = idFrom(job, "post_id")
+  // Si lo editan mientras se arma, se vuelve a armar con lo último (nunca queda una pieza vieja).
+  for (let i = 0; i < 3; i++) {
+    const p = await loadRenderPost(db, postId)
+    if (["PUBLISHED", "PUBLISHING", "CANCELLED", "REJECTED"].includes(p.status)) return
+    const key = await ensureRender(db, p)
+    const now = await loadRenderPost(db, postId)
+    if (renderKey(now) !== key) continue
+    if (key !== now.render_key) await setPost(db, postId, { render_key: key })
+    log("pieza final lista", { post: postId, key })
+    return
+  }
+  throw new Error("el post cambió varias veces mientras se armaba la pieza: se reintenta")
+}
+
+// ── post:redo ───────────────────────────────────────────────────────────────
+/**
+ * Rehace con la IA los borradores de una subida: texto y frase nuevos (distintos al anterior,
+ * siguiendo el pedido de quien aprueba) y, si se pide, otra plantilla u otro tema.
+ * Solo toca posts que siguen esperando aprobación.
+ */
+const redoPosts: Handler = async (job, { db, queue, log }) => {
+  const ids = job.payload.post_ids
+  if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== "string")) throw new PermanentError("payload sin post_ids")
+  const request = typeof job.payload.request === "string" ? job.payload.request.slice(0, 500) : ""
+  const otroDiseno = job.payload.otro_diseno === true
+  const otraMusica = job.payload.otra_musica === true
+
+  const { data, error } = await db
+    .from("cos_posts")
+    .select(
+      `id, status, platform, post_type, caption, overlay_text, template, music_key, brand_id,
+       cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(id, description, ai_json)))`,
+    )
+    .in("id", ids as string[])
+    .eq("status", "PENDING_APPROVAL")
+  if (error) throw new Error(`posts: ${error.message}`)
+  const posts = (data ?? []) as unknown as {
+    id: string
+    platform: string
+    post_type: PostType
+    caption: string
+    overlay_text: string
+    template: Template
+    music_key: string | null
+    brand_id: string
+    cos_post_media: { position: number; cos_asset_versions: { cos_assets: { id: string; description: string | null; ai_json: { summary?: string } | null } | null } | null }[]
+  }[]
+  if (!posts.length) return
+  const first = posts.find((p) => p.post_type !== "story") ?? posts[0]
+  const asset = first.cos_post_media[0]?.cos_asset_versions?.cos_assets
+  if (!asset) throw new PermanentError("el post no tiene archivo")
+
+  const s = await settings(db)
+  const brand = await brandContext(db, first.brand_id)
+  const c = await writeCaption({
+    db,
+    model: s.ai_model,
+    brand,
+    assetId: asset.id,
+    platform: "instagram",
+    postType: first.post_type === "story" ? "feed" : first.post_type,
+    description: asset.description ?? "",
+    aiSummary: asset.ai_json?.summary ?? "",
+    request,
+    previous: { caption: first.caption, overlay: first.overlay_text },
+  })
+  const caption = `${c.hook.trim()}\n${c.caption.trim()}`
+  const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+  const overlay = c.overlay.replace(/[#\p{Extended_Pictographic}]/gu, "").trim().slice(0, 60)
+
+  // Otro diseño: la siguiente plantilla con texto (banda ↔ etiqueta), así se nota el cambio.
+  const nextTemplate = (t: Template): Template => (t === "banda" ? "etiqueta" : "banda")
+  const music = otraMusica ? await listMusic(db, brand.slug) : []
+
+  for (const p of posts) {
+    const nextMusic =
+      otraMusica && p.music_key && music.length > 1
+        ? music.filter((m) => m !== p.music_key)[Math.floor(Math.random() * (music.length - 1))]
+        : p.music_key
+    await setPost(db, p.id, {
+      caption: p.post_type === "story" ? "" : caption,
+      hashtags: p.post_type === "story" ? "" : hashtags,
+      overlay_text: overlay,
+      template: otroDiseno ? nextTemplate(p.template) : p.template,
+      music_key: nextMusic,
+      render_key: null,
+    })
+    await queue.enqueue("post:render", { post_id: p.id })
+  }
+  await db.from("cos_audit_log").insert({
+    event: "post:redone",
+    entity_type: "asset",
+    entity_id: asset.id,
+    actor: "worker",
+    details_json: { posts: posts.map((p) => p.id), request, otroDiseno, otraMusica, rationale: c.rationale },
+  })
+  log("rehecho con IA", { asset: asset.id, posts: posts.length, otroDiseno, otraMusica })
+}
+
+// ── post:delete ─────────────────────────────────────────────────────────────
+const deletePost: Handler = async (job, { db, log }) => {
+  const postId = idFrom(job, "post_id")
+  const { data, error } = await db
+    .from("cos_posts")
+    .select("id, status, remote_post_id, deleted_at, delete_requested_at, simulated, cos_social_accounts(token_ref)")
+    .eq("id", postId)
+    .single()
+  if (error || !data) throw new Error(`post ${postId}: ${error?.message ?? "no existe"}`)
+  const p = data as unknown as {
+    id: string
+    status: string
+    remote_post_id: string | null
+    deleted_at: string | null
+    delete_requested_at: string | null
+    simulated: boolean
+    cos_social_accounts: { token_ref: string | null } | null
+  }
+  if (p.deleted_at || !p.delete_requested_at || p.status !== "PUBLISHED") return
+  try {
+    if (!p.remote_post_id || p.simulated) throw new PermanentError("este post no tiene publicación real para borrar")
+    const r = await deleteRemote(p.remote_post_id, tokenFor(p.cos_social_accounts?.token_ref ?? null))
+    await setPost(db, p.id, { deleted_at: new Date().toISOString(), delete_error: null })
+    log(r === "deleted" ? "BORRADO de Meta" : "ya no estaba en Meta: marcado como borrado", { post: p.id })
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    // Si no se puede borrar, se libera el pedido para que el botón vuelva a estar disponible.
+    await setPost(db, p.id, { delete_error: message, delete_requested_at: null })
+    log("no se pudo borrar", { post: p.id, error: message })
+    if (!(e instanceof PermanentError)) throw e
   }
 }
 
 // ── post:reconcile ──────────────────────────────────────────────────────────
 const reconcilePost: Handler = async (job, { db, log }) => {
   const postId = idFrom(job, "post_id")
-  const p = (await must(db.from("cos_posts").select("id, status, attempts, platform, post_type").eq("id", postId).single(), "post")) as PostRow
+  const p = await loadPost(db, postId)
   if (p.status !== "PUBLISHING") return
   const s = await settings(db)
+  const retry = async (why: string) => {
+    await setPost(db, p.id, { status: "FAILED", last_error: why })
+    await setPost(db, p.id, { status: "RETRY_SCHEDULED", next_attempt_at: new Date().toISOString() })
+  }
   if (s.publish_mode === "simulated") {
     // En simulación no hay nada afuera que consultar: se reintenta.
-    await setPost(db, p.id, { status: "FAILED", last_error: "El worker se cortó mientras publicaba" })
-    await setPost(db, p.id, { status: "RETRY_SCHEDULED", next_attempt_at: new Date().toISOString() })
+    await retry("El worker se cortó mientras publicaba")
     log("reconciliado (simulado): vuelve a intentarse", { post: p.id })
     return
   }
-  // Real: consultar /{ig-user-id}/media por caption + hora antes de reintentar (PLAN §6.3).
-  throw new PermanentError("reconciliación real todavía no conectada")
+
+  // Antes de reintentar, fijarse si en realidad salió (PLAN §6.3): texto exacto + hora.
+  const account = p.cos_social_accounts
+  if (!account) throw new PermanentError("el post no tiene cuenta asignada")
+  const token = tokenFor(account.token_ref)
+  const caption = fullCaption(p.caption, p.hashtags)
+  const around = new Date(p.updated_at)
+  const found =
+    p.platform === "instagram"
+      ? await findInstagramPost(account.external_id, token, caption, around).then((m) => m && { id: m.id, permalink: m.permalink })
+      : await findFacebookPost(account.external_id, token, caption, around).then((m) => m && { id: m.id, permalink: m.permalink_url })
+  if (found) {
+    const permalink = found.permalink
+    await setPost(db, p.id, {
+      status: "PUBLISHED",
+      simulated: false,
+      remote_post_id: found.id,
+      permalink: permalink ?? null,
+      published_at: new Date().toISOString(),
+    })
+    log("reconciliado: ya estaba publicado, se adopta", { post: p.id, remote: found.id })
+    return
+  }
+  await retry("El worker se cortó mientras publicaba (no salió: se reintenta)")
+  log("reconciliado: no había salido, vuelve a intentarse", { post: p.id })
+}
+
+// ── accounts:check ──────────────────────────────────────────────────────────
+const checkAccounts: Handler = async (_job, { db, log }) => {
+  const { data, error } = await db
+    .from("cos_social_accounts")
+    .select("id, platform, external_id, token_ref")
+    .neq("status", "disabled")
+  if (error) throw new Error(`cuentas: ${error.message}`)
+  for (const a of data ?? []) {
+    try {
+      const name = await checkAccount(a.platform, a.external_id, tokenFor(a.token_ref))
+      await markAccount(db, a.id, true, null)
+      log("cuenta OK", { account: a.id, name })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      await markAccount(db, a.id, false, message)
+      log("cuenta con error", { account: a.id, error: message })
+    }
+  }
 }
 
 export const handlers: Record<string, Handler> = {
@@ -299,4 +789,10 @@ export const handlers: Record<string, Handler> = {
   "asset:classify": classifyAsset,
   "post:publish": publishPost,
   "post:reconcile": reconcilePost,
+  "asset:archive": archiveAsset,
+  "post:draft": draftPost,
+  "post:render": renderPost,
+  "post:delete": deletePost,
+  "post:redo": redoPosts,
+  "accounts:check": checkAccounts,
 }

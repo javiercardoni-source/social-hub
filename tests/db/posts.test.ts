@@ -101,6 +101,33 @@ describe("editar algo aprobado lo devuelve a aprobación", () => {
     expect(p.approved_by).toBeNull()
   })
 
+  it("cambiar el texto sobre la imagen, la plantilla o la música de un post aprobado", async () => {
+    for (const cambio of ["overlay_text = 'Tres onigiris'", "template = 'banda'", "music_key = 'music/fasutofudo/lofi.mp3'"]) {
+      const { postId } = await crearPostFasutofudo(db)
+      await aprobar(postId)
+      await db.query(`update cos_posts set ${cambio} where id = $1`, [postId])
+      expect((await estado(db, postId)).status).toBe("PENDING_APPROVAL")
+    }
+  })
+
+  it("rehacer la imagen final (render_key) NO desaprueba: es derivada del contenido", async () => {
+    const { postId } = await crearPostFasutofudo(db)
+    await aprobar(postId)
+    await db.query(`update cos_posts set render_key = 'renders/x.jpg' where id = $1`, [postId])
+    expect((await estado(db, postId)).status).toBe("APPROVED")
+  })
+
+  it("solo se puede pedir borrar un post publicado, y pedirlo no lo desaprueba", async () => {
+    const { postId } = await crearPostFasutofudo(db)
+    await expect(db.query(`update cos_posts set delete_requested_at = now() where id = $1`, [postId])).rejects.toThrow()
+    await aprobar(postId)
+    await db.query(`update cos_posts set status = 'SCHEDULED' where id = $1`, [postId])
+    await db.query(`update cos_posts set status = 'PUBLISHING' where id = $1`, [postId])
+    await db.query(`update cos_posts set status = 'PUBLISHED' where id = $1`, [postId])
+    await db.query(`update cos_posts set delete_requested_at = now(), deleted_at = now() where id = $1`, [postId])
+    expect((await estado(db, postId)).status).toBe("PUBLISHED")
+  })
+
   it("cambiar la fecha de un post programado", async () => {
     const { postId } = await crearPostFasutofudo(db)
     await aprobar(postId)

@@ -10,6 +10,8 @@ COPY worker/package.json worker/package-lock.json ./worker/
 RUN cd worker && npm ci --omit=dev --no-audit --no-fund
 
 COPY worker/src ./worker/src
+# Tipografías y logos de las plantillas de marca (overlay.ts).
+COPY worker/assets ./worker/assets
 COPY shared ./shared
 
 ENV NODE_ENV=production

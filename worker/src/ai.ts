@@ -6,7 +6,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { z } from "zod"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { RISK_FLAGS, brandSystemPrompt, classifierPrompt, type BrandContext } from "../../shared/cos/prompts.ts"
+import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
 import { PermanentError } from "./queue.ts"
 
 export const Classification = z.object({
@@ -44,7 +44,7 @@ export async function classify(opts: {
 }): Promise<Classification> {
   const response = await anthropic().messages.parse({
     model: opts.model,
-    max_tokens: 1500,
+    max_tokens: 4000,
     system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
     messages: [
       {
@@ -72,6 +72,68 @@ export async function classify(opts: {
   await logUsage(opts.db, { purpose: "asset:classify", model: opts.model, usage: response.usage, assetId: opts.assetId })
 
   if (!response.parsed_output) throw new Error(`la IA no devolvió una clasificación válida (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}
+
+export const Caption = z.object({
+  overlay: z
+    .string()
+    .describe(
+      "Frase MUY corta para escribir ENCIMA de la imagen: 2 a 6 palabras, sin emojis ni hashtags. " +
+        "Tiene que describir o celebrar lo que SE VE o lo que dijo el empleado (ej: 'Tres onigiris, tres estilos'). " +
+        "PROHIBIDO afirmar hechos que no estén en la descripción: horarios, 'estamos abiertos', precios, promos, 'nuevo', envíos.",
+    ),
+  hook: z.string(),
+  caption: z.string(),
+  hashtags: z.array(z.string()),
+  rationale: z.string(),
+})
+export type Caption = z.infer<typeof Caption>
+
+/** Texto de la publicación en el tono de la marca (PLAN §11). Nunca inventa precios ni promos. */
+export async function writeCaption(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  assetId: string
+  platform: CaptionPlatform
+  postType: "feed" | "carousel" | "reel" | "story"
+  description: string
+  aiSummary: string
+  /** Pedido de quien aprueba al rehacer ("más gracioso", "mencioná el combo"…). */
+  request?: string
+  /** Versión anterior: al rehacer, la nueva tiene que ser distinta. */
+  previous?: { caption: string; overlay: string }
+}): Promise<Caption> {
+  const extra = [
+    opts.request?.trim() ? opts.request.trim() : "",
+    opts.previous
+      ? `Es un REHACER: proponé algo claramente distinto a la versión anterior (otro enfoque y otras palabras). ` +
+        `Anterior → frase: "${opts.previous.overlay}" · texto: "${opts.previous.caption.slice(0, 400)}"`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 4000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: captionPrompt({
+          platform: opts.platform,
+          postType: opts.postType,
+          descriptions: [opts.description],
+          aiSummaries: [opts.aiSummary],
+          extraInstructions: extra || undefined,
+        }),
+      },
+    ],
+    output_config: { format: zodOutputFormat(Caption) },
+  })
+  await logUsage(opts.db, { purpose: opts.previous ? "post:redo" : "post:draft", model: opts.model, usage: response.usage, assetId: opts.assetId })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió un texto válido (stop: ${response.stop_reason})`)
   return response.parsed_output
 }
 

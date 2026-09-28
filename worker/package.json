@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@supabase/supabase-js": "^2.103.0",
+    "satori": "^0.33.5",
     "zod": "^4.6.5"
   }
 }

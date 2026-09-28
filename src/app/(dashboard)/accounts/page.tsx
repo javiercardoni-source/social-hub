@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { CheckCircle, AlertCircle, Clock, XCircle } from "lucide-react"
 import { PlatformIcon as PIcon } from "@/components/ui/platform-icon"
+import { getActiveBrand } from "@/lib/cos/brand"
+import { ProbarConexion } from "./probar-button"
 
 export const dynamic = "force-dynamic"
 
@@ -66,16 +68,18 @@ export default async function CuentasPage() {
   await requireMember("viewer")
   const db = createAdminClient()
 
-  const { data: brands } = await db
-    .from("cos_brands")
-    .select("id, name, color, slug")
-    .eq("active", true)
-    .order("name")
+  const active = await getActiveBrand()
+  let brandsQuery = db.from("cos_brands").select("id, name, color, slug").eq("active", true).order("name")
+  if (active) brandsQuery = brandsQuery.eq("id", active.id)
+  const { data: brands } = await brandsQuery
+  const { data: settings } = await db.from("cos_settings").select("publish_mode, global_pause").eq("id", true).single()
 
-  const { data: accounts } = await db
+  let accountsQuery = db
     .from("cos_social_accounts")
     .select("id, platform, external_id, display_name, token_ref, status, last_checked_at, last_error, cos_brands(name, color, slug)")
     .order("platform")
+  if (active) accountsQuery = accountsQuery.eq("brand_id", active.id)
+  const { data: accounts } = await accountsQuery
 
   const rows = (accounts ?? []) as unknown as AccountRow[]
   const connectedCount = rows.filter((a) => a.status === "connected").length
@@ -95,19 +99,26 @@ export default async function CuentasPage() {
     <>
       <PageHeader
         title="Cuentas conectadas"
-        description={`${connectedCount} de ${rows.length} cuentas activas`}
-      />
+        description={`${connectedCount} de ${rows.length} cuentas conectadas`}
+      >
+        <ProbarConexion />
+      </PageHeader>
 
       <div className="space-y-6 p-6">
-        {/* Aviso de modo simulación */}
-        <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-800/50 dark:bg-amber-950/20">
-          <Clock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <div className="text-amber-700 dark:text-amber-400">
-            <strong>Modo simulación activo.</strong>{" "}
-            Los posts se marcan como publicados pero no salen realmente a Meta. Para conectar las cuentas
-            necesitás el System User token de Meta y aprobar el App Review.
+        {settings?.publish_mode !== "live" ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <strong>Publicación simulada.</strong> Los posts se marcan como publicados pero no salen a Meta.
           </div>
-        </div>
+        ) : settings.global_pause ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <strong>Pausa general activada.</strong> No sale ningún post hasta que la saques (abajo a la izquierda).
+          </div>
+        ) : (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <strong>Publicación real activa.</strong> Lo que aprobás sale de verdad en estas cuentas. Los tokens no vencen;
+            si cambiás la contraseña de Facebook hay que regenerarlos (scripts/meta-conectar.py).
+          </div>
+        )}
 
         {Object.values(byBrand).map(({ brand, accounts: brandAccounts }) => (
           <Card key={brand.id}>

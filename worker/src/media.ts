@@ -92,6 +92,142 @@ export async function framesForAi(file: string, probeInfo: Probe, dir: string): 
   return frames
 }
 
+/** Instagram solo acepta JPEG: convierte PNG/HEIC/WebP (máximo 1440 px, calidad alta). */
+export async function toJpeg(file: string, dir: string): Promise<Buffer> {
+  const out = join(dir, "publish.jpg")
+  await run("ffmpeg", ["-y", "-i", file, "-frames:v", "1", "-vf", "scale='min(1440,iw)':-2", "-q:v", "2", out], {
+    timeout: FF_TIMEOUT_MS,
+  })
+  return readFile(out)
+}
+
+/**
+ * Encaja una foto en un rango de proporciones sin recortar nada: si se pasa, se completa
+ * hasta el formato con la misma foto desenfocada de fondo. Siempre devuelve JPEG.
+ */
+async function fitPhoto(file: string, dir: string, min: number, max: number, tall: [number, number], wide: [number, number]) {
+  const info = await probe(file, "image/jpeg")
+  const ratio = info.width / info.height
+  if (ratio >= min && ratio <= max) return toJpeg(file, dir)
+  const [w, h] = ratio < min ? tall : wide
+  const out = join(dir, "fit.jpg")
+  const filter =
+    `[0:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},boxblur=30:3[bg];` +
+    `[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2`
+  await run("ffmpeg", ["-y", "-i", file, "-filter_complex", filter, "-frames:v", "1", "-q:v", "2", out], {
+    timeout: FF_TIMEOUT_MS,
+  })
+  return readFile(out)
+}
+
+/** Feed de Instagram: entre 4:5 y 1,91:1 (si no, Meta la rechaza). */
+export const fitForInstagramFeed = (file: string, dir: string) => fitPhoto(file, dir, 0.8, 1.91, [1080, 1350], [1440, 754])
+
+/** Historia: 9:16 (se tolera un poco de margen). */
+export const fitForStory = (file: string, dir: string) => fitPhoto(file, dir, 0.55, 0.58, [1080, 1920], [1080, 1920])
+
+/** Pega una capa PNG (del mismo tamaño) sobre una foto. Devuelve JPEG. */
+export async function compositePhoto(base: Buffer, layer: Buffer, dir: string): Promise<Buffer> {
+  const b = await writeTmp(dir, "base.jpg", base)
+  const l = await writeTmp(dir, "layer.png", layer)
+  const out = join(dir, "final.jpg")
+  await run("ffmpeg", ["-y", "-i", b, "-i", l, "-filter_complex", "[0:v][1:v]overlay=0:0", "-frames:v", "1", "-q:v", "2", out], {
+    timeout: FF_TIMEOUT_MS,
+  })
+  return readFile(out)
+}
+
+/** Pega la capa sobre todo el video (se re-codifica: H.264, audio intacto). */
+export async function compositeVideo(base: Buffer, layer: Buffer, dir: string): Promise<Buffer> {
+  const b = await writeTmp(dir, "base.mp4", base)
+  const l = await writeTmp(dir, "layer.png", layer)
+  const out = join(dir, "final.mp4")
+  await run(
+    "ffmpeg",
+    ["-y", "-i", b, "-i", l, "-filter_complex", "[0:v][1:v]overlay=0:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out],
+    { timeout: 10 * 60_000 },
+  )
+  return readFile(out)
+}
+
+export async function audioSeconds(file: string): Promise<number> {
+  const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file], { timeout: FF_TIMEOUT_MS })
+  return Number(stdout.trim()) || 0
+}
+
+export async function hasAudio(file: string): Promise<boolean> {
+  const { stdout } = await run("ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file], {
+    timeout: FF_TIMEOUT_MS,
+  })
+  return stdout.trim().length > 0
+}
+
+const MUSIC_FADE = (seconds: number) => `afade=t=in:d=0.6,afade=t=out:st=${Math.max(seconds - 1.2, 0)}:d=1.2,loudnorm=I=-14:TP=-1.5`
+
+/**
+ * Foto → reel: 1080×1920, zoom lento, la capa de la plantilla quieta encima y un tema de la
+ * biblioteca de la marca (con fundido y volumen normalizado al nivel de Instagram).
+ */
+export async function photoToReel(opts: { photo9x16: Buffer; layer: Buffer | null; music: Buffer | null; seconds: number; dir: string }): Promise<Buffer> {
+  const { dir, seconds } = opts
+  const img = await writeTmp(dir, "reel-base.jpg", opts.photo9x16)
+  const frames = Math.round(seconds * 30)
+  const args = ["-y", "-loop", "1", "-i", img]
+  if (opts.layer) args.push("-i", await writeTmp(dir, "reel-layer.png", opts.layer))
+  // Sin tema elegido: pista muda (Instagram necesita una pista de audio igual).
+  // Con tema: se arranca a un cuarto del tema, salteando la intro (suele ser la parte floja).
+  if (opts.music) {
+    const m = await writeTmp(dir, "music.audio", opts.music)
+    const total = await audioSeconds(m)
+    const start = total > seconds * 3 ? Math.floor(total * 0.25) : 0
+    args.push("-ss", String(start), "-i", m)
+  } else args.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo")
+  const audioIn = opts.layer ? 2 : 1
+  const zoom = `[0:v]scale=2160:3840,zoompan=z='min(zoom+0.0005,1.1)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1080x1920:fps=30,setsar=1[bg]`
+  const video = opts.layer ? `${zoom};[bg][1:v]overlay=0:0,format=yuv420p[v]` : `${zoom};[bg]format=yuv420p[v]`
+  const out = join(dir, "reel.mp4")
+  args.push(
+    "-filter_complex", `${video};[${audioIn}:a]atrim=0:${seconds},${MUSIC_FADE(seconds)}[a]`,
+    "-map", "[v]", "-map", "[a]", "-t", String(seconds),
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
+  )
+  await run("ffmpeg", args, { timeout: 10 * 60_000 })
+  return readFile(out)
+}
+
+/** Video con la capa de la plantilla (opcional) y música de fondo (opcional, bajo el sonido original). */
+export async function finishVideo(opts: { video: Buffer; layer: Buffer | null; music: Buffer | null; dir: string }): Promise<Buffer> {
+  const { dir } = opts
+  const v = await writeTmp(dir, "base.mp4", opts.video)
+  const info = await probe(v, "video/mp4")
+  const seconds = (info.durationMs ?? 15_000) / 1000
+  const args = ["-y", "-i", v]
+  let idx = 1
+  const filters: string[] = []
+  let vOut = "0:v"
+  if (opts.layer) {
+    args.push("-i", await writeTmp(dir, "layer.png", opts.layer))
+    filters.push(`[0:v][${idx}:v]overlay=0:0,format=yuv420p[v]`)
+    vOut = "[v]"
+    idx++
+  }
+  let aMap: string[] = ["-map", "0:a?"]
+  if (opts.music) {
+    args.push("-stream_loop", "-1", "-i", await writeTmp(dir, "music.audio", opts.music))
+    const m = `[${idx}:a]atrim=0:${seconds},${MUSIC_FADE(seconds)}`
+    if (await hasAudio(v)) filters.push(`${m},volume=0.35[m];[0:a][m]amix=inputs=2:duration=first:normalize=0[a]`)
+    else filters.push(`${m}[a]`)
+    aMap = ["-map", "[a]"]
+  }
+  const out = join(dir, "final.mp4")
+  if (filters.length) args.push("-filter_complex", filters.join(";"))
+  args.push("-map", vOut, ...aMap, "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out)
+  await run("ffmpeg", args, { timeout: 10 * 60_000 })
+  return readFile(out)
+}
+
 export async function writeTmp(dir: string, name: string, data: Buffer): Promise<string> {
   const p = join(dir, name)
   await writeFile(p, data)

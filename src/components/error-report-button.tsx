@@ -179,6 +179,7 @@ export function ErrorReportButton() {
           onClick={capture}
           disabled={capturing}
           title="Reportar un error / algo raro"
+          className="argos-fab"
           style={{
             position: "fixed", bottom: 16, right: 16, zIndex: 2147483000,
             width: 48, height: 48, borderRadius: "9999px", border: "none",
