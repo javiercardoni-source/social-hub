@@ -11,6 +11,7 @@
  *   post:render     arma la pieza final (encuadre + plantilla de marca) que se aprueba y se publica
  *   post:publish    SCHEDULED/RETRY → PUBLISHING → PUBLISHED (simulado o real en Meta)
  *   post:reconcile  un post que quedó "publicando" cuando el worker se cayó
+ *   metrics:sync    trae lo publicado y mide cada post según su edad (F1 analytics)
  *   accounts:check  prueba el token de cada cuenta y la marca conectada o con error
  *
  * Un manejador tira PermanentError si reintentar no sirve; cualquier otro error vuelve
@@ -22,7 +23,9 @@ import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
 import { fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, withTmp, writeTmp } from "./media.ts"
 import { classify, writeCaption } from "./ai.ts"
 import { driveFromEnv } from "./drive.ts"
-import { ensureRender, loadRenderPost, renderKey } from "./render.ts"
+import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
+import { syncAccount } from "./metrics.ts"
+import { contextForBrand, syncContext } from "./context.ts"
 import { defaultTemplate, type Template } from "./overlay.ts"
 import {
   checkAccount,
@@ -275,6 +278,7 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     postType: isVideo ? "reel" : "feed",
     description: a.description ?? "",
     aiSummary: a.ai_json?.summary ?? "",
+    context: await contextForBrand(db, a.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
   })
   const caption = `${c.hook.trim()}\n${c.caption.trim()}`
   const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
@@ -585,15 +589,24 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
 // ── post:render ─────────────────────────────────────────────────────────────
 const renderPost: Handler = async (job, { db, log }) => {
   const postId = idFrom(job, "post_id")
+  const s = await settings(db)
   // Si lo editan mientras se arma, se vuelve a armar con lo último (nunca queda una pieza vieja).
   for (let i = 0; i < 3; i++) {
     const p = await loadRenderPost(db, postId)
     if (["PUBLISHED", "PUBLISHING", "CANCELLED", "REJECTED"].includes(p.status)) return
-    const key = await ensureRender(db, p)
+    // Ya resuelta y revisada (o aprobada): solo se asegura que exista, sin volver a decidir.
+    if (p.overlay_layout && p.render_qa) {
+      const key = await ensureRender(db, p)
+      if (key !== p.render_key) await setPost(db, postId, { render_key: key })
+      return
+    }
+    const r = await renderReviewed(db, p, s.ai_model)
     const now = await loadRenderPost(db, postId)
-    if (renderKey(now) !== key) continue
-    if (key !== now.render_key) await setPost(db, postId, { render_key: key })
-    log("pieza final lista", { post: postId, key })
+    const changed =
+      now.template !== p.template || now.overlay_text !== p.overlay_text || now.music_key !== p.music_key || now.overlay_position !== p.overlay_position
+    if (changed) continue
+    await setPost(db, postId, { render_key: r.key, overlay_layout: r.layout, render_qa: r.qa })
+    log("pieza final lista", { post: postId, key: r.key, layout: r.layout, qa: r.qa })
     return
   }
   throw new Error("el post cambió varias veces mientras se armaba la pieza: se reintenta")
@@ -650,6 +663,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     aiSummary: asset.ai_json?.summary ?? "",
     request,
     previous: { caption: first.caption, overlay: first.overlay_text },
+    context: await contextForBrand(db, first.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
   })
   const caption = `${c.hook.trim()}\n${c.caption.trim()}`
   const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
@@ -671,6 +685,9 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
       template: otroDiseno ? nextTemplate(p.template) : p.template,
       music_key: nextMusic,
       render_key: null,
+      // Contenido nuevo: la posición se vuelve a decidir con la revisión visual.
+      overlay_layout: null,
+      render_qa: null,
     })
     await queue.enqueue("post:render", { post_id: p.id })
   }
@@ -682,6 +699,44 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     details_json: { posts: posts.map((p) => p.id), request, otroDiseno, otraMusica, rationale: c.rationale },
   })
   log("rehecho con IA", { asset: asset.id, posts: posts.length, otroDiseno, otraMusica })
+}
+
+// ── metrics:sync ────────────────────────────────────────────────────────────
+const syncMetrics: Handler = async (job, { db, queue, log }) => {
+  const accountId = idFrom(job, "account_id")
+  const { data: acc, error } = await db
+    .from("cos_social_accounts")
+    .select("id, brand_id, platform, external_id, token_ref, status, metrics_backfill_cursor, metrics_backfill_done")
+    .eq("id", accountId)
+    .single()
+  if (error || !acc) throw new PermanentError(`cuenta ${accountId}: ${error?.message ?? "no existe"}`)
+  if (acc.status === "disabled" || !["instagram", "facebook"].includes(acc.platform)) return
+  // Una sola corrida por cuenta a la vez (el reloj y la continuación pueden coincidir).
+  const { data: running } = await db
+    .from("cos_jobs")
+    .select("id")
+    .eq("type", "metrics:sync")
+    .eq("status", "running")
+    .eq("payload->>account_id", acc.id)
+    .neq("id", job.id)
+    .limit(1)
+  if (running?.length) {
+    log("ya hay una sincronización de esta cuenta en curso: esta se saltea", { account: acc.id })
+    return
+  }
+  const r = await syncAccount(db, acc as Parameters<typeof syncAccount>[1], log)
+  log("métricas sincronizadas", { account: acc.id, platform: acc.platform, ...r })
+  // Queda histórico o mediciones pendientes: sigue en un rato (clave única por minuto).
+  if (r.more) {
+    const at = new Date(Date.now() + 90_000)
+    await queue.enqueue("metrics:sync", { account_id: acc.id }, { runAt: at, dedupeKey: `metrics:${acc.id}:more:${at.toISOString().slice(0, 16)}` })
+  }
+}
+
+// ── context:sync (F4) ──────────────────────────────────────────────────────
+const syncContextJob: Handler = async (_job, { db, log }) => {
+  const r = await syncContext(db)
+  log("contexto sincronizado", r)
 }
 
 // ── post:delete ─────────────────────────────────────────────────────────────
@@ -794,5 +849,7 @@ export const handlers: Record<string, Handler> = {
   "post:render": renderPost,
   "post:delete": deletePost,
   "post:redo": redoPosts,
+  "metrics:sync": syncMetrics,
+  "context:sync": syncContextJob,
   "accounts:check": checkAccounts,
 }

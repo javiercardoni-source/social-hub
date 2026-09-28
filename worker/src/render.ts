@@ -10,10 +10,11 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError } from "./queue.ts"
 import { storageFor, supabaseStorage } from "./storage.ts"
 import { compositePhoto, finishVideo, fitForInstagramFeed, fitForStory, photoToReel, probe, toJpeg, withTmp, writeTmp } from "./media.ts"
-import { renderOverlay, type Template } from "./overlay.ts"
+import { layoutCandidates, renderOverlay, type Layout, type Template } from "./overlay.ts"
+import { reviewPiece, type PieceReview } from "./ai.ts"
 
 // Subir este número vuelve a generar todas las piezas (si cambia el diseño de las plantillas).
-const RENDER_VERSION = "5"
+const RENDER_VERSION = "6"
 const PHOTO_REEL_SECONDS = 8
 
 export type RenderPost = {
@@ -23,6 +24,9 @@ export type RenderPost = {
   overlay_text: string
   template: Template
   music_key: string | null
+  overlay_position: "auto" | Layout
+  /** Posición resuelta (la eligió la revisión visual o Javier). Sin resolver = abajo. */
+  overlay_layout: Layout | null
   brand_slug: string
   version: { id: string; storage_driver: string; storage_key: string | null; drive_file_id: string | null; mime: string | null }
 }
@@ -42,7 +46,7 @@ export function renderKey(p: RenderPost): string | null {
   // Un video sin plantilla ni música se publica tal cual: no hay nada que armar.
   if (isVideo && p.template === "none" && !p.music_key) return null
   const h = createHash("sha256")
-    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug].join("\x1f"))
+    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom"].join("\x1f"))
     .digest("hex")
     .slice(0, 16)
   return `renders/${p.id}/${h}.${rendersVideo(p) ? "mp4" : "jpg"}`
@@ -77,17 +81,17 @@ export async function ensureRender(db: SupabaseClient, p: RenderPost): Promise<s
     const f = await writeTmp(dir, isVideo ? "in.mp4" : "in", original)
     if (isVideo) {
       const info = await probe(f, v.mime)
-      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story: story || reel })
+      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story: story || reel, layout: p.overlay_layout ?? "bottom" })
       return finishVideo({ video: original, layer, music, dir })
     }
     if (rendersVideo(p)) {
       const base = await fitForStory(f, dir)
-      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: 1080, height: 1920, story: true })
+      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: 1080, height: 1920, story: true, layout: p.overlay_layout ?? "bottom" })
       return photoToReel({ photo9x16: base, layer, music, seconds: PHOTO_REEL_SECONDS, dir })
     }
     const base = story ? await fitForStory(f, dir) : igFeed ? await fitForInstagramFeed(f, dir) : await toJpeg(f, dir)
     const info = await probe(await writeTmp(dir, "fit.jpg", base), "image/jpeg")
-    const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story })
+    const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story, layout: p.overlay_layout ?? "bottom" })
     return layer ? compositePhoto(base, layer, dir) : base
   })
 
@@ -95,12 +99,52 @@ export async function ensureRender(db: SupabaseClient, p: RenderPost): Promise<s
   return key
 }
 
+/** Un cuadro de la pieza para revisarla: la imagen, o el cuadro del medio del video. */
+async function frameOf(db: SupabaseClient, key: string): Promise<Buffer> {
+  const data = await supabaseStorage(db).download(key)
+  if (!key.endsWith(".mp4")) return data
+  return withTmp(async (dir) => {
+    const f = await writeTmp(dir, "piece.mp4", data)
+    const info = await probe(f, "video/mp4")
+    const at = ((info.durationMs ?? 4000) / 1000) * 0.6
+    const { execFile } = await import("node:child_process")
+    const { promisify } = await import("node:util")
+    const out = `${dir}/frame.jpg`
+    await promisify(execFile)("ffmpeg", ["-y", "-ss", at.toFixed(2), "-i", f, "-frames:v", "1", "-q:v", "3", out], { timeout: 60_000 })
+    const { readFile } = await import("node:fs/promises")
+    return readFile(out)
+  })
+}
+
+export type Resolved = { key: string | null; layout: Layout | null; qa: (PieceReview & { tried: Layout[] }) | { skipped: string } }
+
+/**
+ * Arma la pieza probando posiciones y haciéndola revisar por la IA: se queda con la primera
+ * que no tapa nada. Si ninguna pasa, devuelve la mejor puntuada con la advertencia a la vista.
+ */
+export async function renderReviewed(db: SupabaseClient, p: RenderPost, model: string): Promise<Resolved> {
+  if (p.template === "none") {
+    return { key: await ensureRender(db, { ...p, overlay_layout: null }), layout: null, qa: { skipped: "sin plantilla" } }
+  }
+  const tried: Layout[] = []
+  let best: { key: string | null; layout: Layout; review: PieceReview } | null = null
+  for (const layout of layoutCandidates(p.template, p.overlay_position)) {
+    const key = await ensureRender(db, { ...p, overlay_layout: layout })
+    if (!key) return { key, layout, qa: { skipped: "video sin cambios" } }
+    const review = await reviewPiece({ db, model, image: await frameOf(db, key), overlayText: p.overlay_text, template: p.template })
+    tried.push(layout)
+    if (!best || review.score > best.review.score || (review.ok && !best.review.ok)) best = { key, layout, review }
+    if (review.ok) break
+  }
+  return { key: best!.key, layout: best!.layout, qa: { ...best!.review, tried } }
+}
+
 /** Carga lo que hace falta para armar la pieza de un post. */
-export async function loadRenderPost(db: SupabaseClient, postId: string): Promise<RenderPost & { render_key: string | null; status: string }> {
+export async function loadRenderPost(db: SupabaseClient, postId: string): Promise<RenderPost & { render_key: string | null; render_qa: unknown; status: string }> {
   const { data, error } = await db
     .from("cos_posts")
     .select(
-      `id, status, platform, post_type, overlay_text, template, music_key, render_key, cos_brands(slug),
+      `id, status, platform, post_type, overlay_text, template, music_key, overlay_position, overlay_layout, render_key, render_qa, cos_brands(slug),
        cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime))`,
     )
     .eq("id", postId)
@@ -114,7 +158,10 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
     overlay_text: string
     template: Template
     music_key: string | null
+    overlay_position: "auto" | Layout
+    overlay_layout: Layout | null
     render_key: string | null
+    render_qa: unknown
     cos_brands: { slug: string } | null
     cos_post_media: { position: number; cos_asset_versions: RenderPost["version"] | null }[]
   }

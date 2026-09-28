@@ -1,5 +1,7 @@
 "use client"
 
+import { explicarError } from "@/lib/ui-errors"
+
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
@@ -27,7 +29,7 @@ export function AccionesPost({ id, status, platform, permalink, deleted, deletin
         await fn()
         router.refresh()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(explicarError(e))
       }
     })
 

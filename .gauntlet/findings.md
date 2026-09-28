@@ -1,0 +1,21 @@
+# Hallazgos
+
+| # | Feature | Sev | Hallazgo | Verificado | Estado |
+|---|---|---|---|---|---|
+| 1 | F1 | P1 | Sesgo por crecimiento: lift contra mediana anual | Sí (real) | Corregido: mediana de su época ±60 días + test |
+| 2 | F1 | P1→✗ | "Fallback mezcla formatos de escalas distintas" | No: lifts() ya normaliza por formato | Descartado (falso positivo) |
+| 3 | F1 | P1→P2 | Chips de horario con confianza baja se pueden usar sin aviso | Sí | Corregido: leyenda "poca data" visible |
+| 4 | F1 | P2 | Seguidores sumados de varias cuentas con etiqueta singular | Sí | Corregido: "(N cuentas)" |
+| 5 | F1 | P2→✗ | "perfValue mezcla alcance IG y vistas FB" | No: cada cuenta se compara consigo misma | Descartado |
+| 6 | F1 | P1→P2 | Paginación: `next` sin `cursors.after` marcaría el histórico como terminado | Sí (borde; el escenario de "falla a mitad pierde datos" es falso) | Corregido: nextCursor() tira error |
+| 7 | F1 | P1→P2 | Dos corridas de la misma cuenta a la vez (reloj + continuación) | Sí (gasta llamadas, datos idempotentes) | Corregido: guarda de corrida única |
+| 8 | F1 | P2 | age_hours enviado como texto | Sí | Corregido |
+| 9 | F1 | P2→✗ | "Vinculación post_id sin filtrar marca" | No: la cuenta pertenece a una sola marca | Descartado |
+| 10 | F1 | P3→✗ | "onConflict sobre columna generada podría no deduplicar" | Probado contra la base real: 2 upserts misma hora = 1 fila | Descartado |
+| 11 | F1 | P1 | (builder) Reloj de métricas re-encolaba cada 15 min | Sí | Corregido antes de críticos |
+| 12 | F1 | P2 | (builder) FB devolvía alcance 0 con vistas reales | Sí | Corregido |
+| 13 | QA visual | P0 | Se podía aprobar con la pieza a medio armar → se publicaba una versión no vista | Sí | Corregido: aprobarPost exige render_qa |
+| 14 | QA visual | P1→P2 | Se puede aprobar una pieza que la IA marcó "tapa algo" | Sí (decisión de Javier) | Corregido: confirmación explícita |
+| 15 | QA visual | P0→✗ | "Hash '' vs renderKey 'bottom'" | No: layout null = abajo siempre; clave de archivo ≠ contenido | Descartado |
+| 16 | QA visual | P2→✗ | "Posts aprobados antes de 0008 quedan con hash viejo" | Verificado: no había ninguno | Descartado |
+| 17 | QA visual | P1 | (builder) Reemplazo de sección borró 3 handlers | Sí (lo detectó el typecheck) | Restaurado + diff contra HEAD |

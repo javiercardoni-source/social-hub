@@ -104,8 +104,15 @@ export async function writeCaption(opts: {
   request?: string
   /** Versión anterior: al rehacer, la nueva tiene que ser distinta. */
   previous?: { caption: string; overlay: string }
+  /** Contexto real de hoy/mañana (fechas especiales y clima, F4). */
+  context?: string
 }): Promise<Caption> {
   const extra = [
+    opts.context
+      ? "CONTEXTO REAL de estos días (usalo SOLO si suma naturalmente al post; si no, ignoralo. Nunca inventes fechas ni " +
+        "promos, y no prometas nada por el clima: 'llueve, quedate adentro y pedí' está bien; 'llegamos rápido aunque llueva' NO):\n" +
+        opts.context
+      : "",
     opts.request?.trim() ? opts.request.trim() : "",
     opts.previous
       ? `Es un REHACER: proponé algo claramente distinto a la versión anterior (otro enfoque y otras palabras). ` +
@@ -134,6 +141,48 @@ export async function writeCaption(opts: {
   })
   await logUsage(opts.db, { purpose: opts.previous ? "post:redo" : "post:draft", model: opts.model, usage: response.usage, assetId: opts.assetId })
   if (!response.parsed_output) throw new Error(`la IA no devolvió un texto válido (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}
+
+export const PieceReview = z.object({
+  ok: z.boolean().describe("true solo si NADA importante queda tapado y el texto se lee bien"),
+  tapa: z.string().describe("Qué tapa (vacío si nada): ej. 'la cara de la mascota', 'el producto', 'el logo que ya trae la foto'"),
+  legible: z.boolean(),
+  score: z.number().int().min(0).max(100).describe("Calidad de la composición final: 100 = perfecta"),
+})
+export type PieceReview = z.infer<typeof PieceReview>
+
+/**
+ * Control de calidad visual de la pieza final: ¿la banda, el cartel o el logo agregados tapan
+ * algo importante de la foto? ¿se lee el texto? Lo usa el armado de piezas para elegir posición.
+ */
+export async function reviewPiece(opts: { db: SupabaseClient; model: string; image: Buffer; overlayText: string; template: string }): Promise<PieceReview> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2000,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: opts.image.toString("base64") } },
+          {
+            type: "text",
+            text: [
+              "Sos director de arte y revisás una pieza para Instagram ANTES de publicarla.",
+              `Sobre la foto original se agregó una plantilla "${opts.template}"${opts.overlayText ? ` con el texto "${opts.overlayText}"` : ""} y el logo de la marca.`,
+              "Marcá ok=false si lo agregado (franja, cartel, texto o logo) tapa total o PARCIALMENTE algo importante de la foto:",
+              "el producto o la comida, la cara o el cuerpo de una mascota o personaje, caras de personas, un logo o texto que ya venía en la foto.",
+              "También ok=false si el texto agregado no se lee bien. Si lo agregado cae sobre fondo, mesa, pared o zona vacía, está bien.",
+              "Sé estricto: un recorte de la cara o del producto es un error aunque sea chico.",
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(PieceReview) },
+  })
+  await logUsage(opts.db, { purpose: "piece:review", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió la revisión (stop: ${response.stop_reason})`)
   return response.parsed_output
 }
 

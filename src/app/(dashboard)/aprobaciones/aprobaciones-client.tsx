@@ -1,5 +1,7 @@
 "use client"
 
+import { explicarError } from "@/lib/ui-errors"
+
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { aprobarPost, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
@@ -18,6 +20,9 @@ export type PostItem = {
   scheduledAt: string | null
   overlayText: string
   musicKey: string | null
+  position: "auto" | "top" | "bottom"
+  qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
+  suggestions: { at: string; label: string; lift: string; up: boolean; confianza: string }[]
   template: string
   renderUrl: string | null
   accountName: string
@@ -189,7 +194,10 @@ function GrupoCard({ g }: { g: Grupo }) {
   const [resuelto, setResuelto] = useState<Record<string, "aprobado" | "rechazado">>({})
   const [textos, setTextos] = useState(() =>
     Object.fromEntries(
-      g.posts.map((p) => [p.id, { caption: p.caption, hashtags: p.hashtags, overlay: p.overlayText, template: p.template, music: p.musicKey }]),
+      g.posts.map((p) => [
+        p.id,
+        { caption: p.caption, hashtags: p.hashtags, overlay: p.overlayText, template: p.template, music: p.musicKey, position: p.position },
+      ]),
     ),
   )
   const [cuando, setCuando] = useState<"ya" | "programar">("ya")
@@ -209,7 +217,7 @@ function GrupoCard({ g }: { g: Grupo }) {
   const t = textos[p.id]
   const changed = (x: PostItem) => {
     const tx = textos[x.id]
-    return tx.caption !== x.caption || tx.hashtags !== x.hashtags || tx.overlay !== x.overlayText || tx.template !== x.template || tx.music !== x.musicKey
+    return tx.caption !== x.caption || tx.hashtags !== x.hashtags || tx.overlay !== x.overlayText || tx.template !== x.template || tx.music !== x.musicKey || tx.position !== x.position
   }
   const editado = changed(p)
   const set = (patch: Partial<(typeof textos)[string]>) => setTextos((s) => ({ ...s, [p.id]: { ...s[p.id], ...patch } }))
@@ -217,7 +225,7 @@ function GrupoCard({ g }: { g: Grupo }) {
   // Guarda y pide al worker la pieza nueva; la vista previa se actualiza sola en unos segundos.
   function verComoQueda() {
     run(async () => {
-      await editarPost(p.id, t.caption, t.hashtags, t.overlay, t.template, t.music)
+      await editarPost(p.id, t.caption, t.hashtags, t.overlay, t.template, t.music, t.position)
       for (const ms of [3000, 4000, 6000]) {
         await new Promise((r) => setTimeout(r, ms))
         router.refresh()
@@ -232,7 +240,7 @@ function GrupoCard({ g }: { g: Grupo }) {
         await fn()
         router.refresh()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(explicarError(e))
       }
     })
   }
@@ -240,10 +248,13 @@ function GrupoCard({ g }: { g: Grupo }) {
   const scheduled = () => (cuando === "ya" ? null : new Date(fecha).toISOString())
 
   async function aprobar(ids: string[]) {
+    // Si la IA marcó que alguna pieza tapa algo, se pide confirmación (la decisión es de Javier).
+    const conAviso = g.posts.filter((x) => ids.includes(x.id) && x.qa && !x.qa.skipped && x.qa.ok === false)
+    if (conAviso.length && !confirm(`La IA detectó que ${conAviso.map((x) => `${label(x)} tapa ${x.qa?.tapa || "algo"}`).join("; ")}. ¿Aprobar igual?`)) return
     for (const id of ids) {
       const tx = textos[id]
       const orig = g.posts.find((x) => x.id === id)!
-      if (changed(orig)) await editarPost(id, tx.caption, tx.hashtags, tx.overlay, tx.template, tx.music)
+      if (changed(orig)) await editarPost(id, tx.caption, tx.hashtags, tx.overlay, tx.template, tx.music, tx.position)
       await aprobarPost(id, scheduled())
       setResuelto((r) => ({ ...r, [id]: "aprobado" }))
     }
@@ -329,6 +340,35 @@ function GrupoCard({ g }: { g: Grupo }) {
                 </button>
               ))}
             </div>
+            {t.template !== "none" && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">Posición:</span>
+                {(
+                  [
+                    ["auto", "Automática (la IA elige)"],
+                    ["top", "Arriba"],
+                    ["bottom", "Abajo"],
+                  ] as const
+                ).map(([id, lbl]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    disabled={!!resuelto[p.id]}
+                    onClick={() => set({ position: id })}
+                    className={cn("rounded-full border px-2.5 py-0.5 font-semibold", t.position === id ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted")}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            )}
+            {p.renderUrl && !editado && p.qa && !p.qa.skipped && (
+              <p className={cn("rounded-lg px-2.5 py-1.5 text-xs font-medium", p.qa.ok ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800")}>
+                {p.qa.ok
+                  ? "✓ Revisado por la IA: no tapa nada importante y se lee bien"
+                  : `⚠ La IA detectó que ${p.qa.tapa ? `tapa ${p.qa.tapa}` : "no se lee bien"}. Probá otra posición, otra plantilla, o "Sin nada".`}
+              </p>
+            )}
             {(t.template === "banda" || t.template === "etiqueta") && (
               <input
                 value={t.overlay}
@@ -420,6 +460,29 @@ function GrupoCard({ g }: { g: Grupo }) {
             >
               Programar
             </button>
+            {p.suggestions.length > 0 && !resuelto[p.id] && (
+              <div className="flex w-full flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">Mejores horarios según tus métricas:</span>
+                {p.suggestions.map((sg) => (
+                  <button
+                    key={sg.at}
+                    type="button"
+                    title={`Confianza ${sg.confianza}`}
+                    onClick={() => {
+                      setCuando("programar")
+                      setFecha(toLocalInput(new Date(sg.at)))
+                    }}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px] font-semibold capitalize",
+                      cuando === "programar" && fecha === toLocalInput(new Date(sg.at)) ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted",
+                    )}
+                  >
+                    {sg.label} <span className={sg.up ? "text-emerald-600" : "text-muted-foreground"}>{sg.lift}</span>
+                    {sg.confianza === "baja" && <span className="ml-1 font-normal normal-case text-amber-600">· poca data</span>}
+                  </button>
+                ))}
+              </div>
+            )}
             {cuando === "programar" && (
               <input
                 type="datetime-local"

@@ -128,6 +128,43 @@ void tick()
 const clock = setInterval(() => void tick(), TICK_MS)
 shutdown.signal.addEventListener("abort", () => clearInterval(clock), { once: true })
 
+// Métricas (F1): cada 2 horas, una sincronización por cuenta. La clave por ventana evita
+// encolar dos veces la misma si el worker se reinicia.
+const METRICS_MS = 2 * 3600_000
+async function scheduleMetrics() {
+  if (shutdown.signal.aborted) return
+  const { data, error } = await db
+    .from("cos_social_accounts")
+    .select("id, metrics_synced_at")
+    .neq("status", "disabled")
+    .in("platform", ["instagram", "facebook"])
+  if (error) return log("no pude programar métricas", { error: error.message })
+  const window = Math.floor(Date.now() / METRICS_MS)
+  // Solo las que no se sincronizaron en las últimas 2 horas (la clave de la cola solo evita
+  // duplicados mientras el trabajo está vivo; una vez hecho, esto es lo que frena).
+  const due = (data ?? []).filter((a) => !a.metrics_synced_at || Date.now() - new Date(a.metrics_synced_at).getTime() > METRICS_MS - 5 * 60_000)
+  for (const a of due) {
+    await queue.enqueue("metrics:sync", { account_id: a.id }, { dedupeKey: `metrics:${a.id}:${window}` }).catch((e) => log("no pude encolar métricas", { error: String(e) }))
+  }
+}
+void scheduleMetrics()
+const metricsClock = setInterval(() => void scheduleMetrics(), 15 * 60_000)
+shutdown.signal.addEventListener("abort", () => clearInterval(metricsClock), { once: true })
+
+// Contexto (F4): feriados, fechas especiales y clima, cada 6 horas.
+async function scheduleContext() {
+  if (shutdown.signal.aborted) return
+  const { data } = await db.from("cos_weather_daily").select("updated_at").order("updated_at", { ascending: false }).limit(1)
+  const last = data?.[0]?.updated_at ? new Date(data[0].updated_at).getTime() : 0
+  if (Date.now() - last < 6 * 3600_000) return
+  await queue
+    .enqueue("context:sync", {}, { dedupeKey: `context:${Math.floor(Date.now() / (6 * 3600_000))}` })
+    .catch((e) => log("no pude encolar el contexto", { error: String(e) }))
+}
+void scheduleContext()
+const contextClock = setInterval(() => void scheduleContext(), 30 * 60_000)
+shutdown.signal.addEventListener("abort", () => clearInterval(contextClock), { once: true })
+
 const done = loop()
 
 async function stop(signal: string) {

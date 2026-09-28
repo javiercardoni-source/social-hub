@@ -18,6 +18,13 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 export type Template = "none" | "banda" | "etiqueta" | "firma"
+export type Layout = "top" | "bottom"
+
+/** Posiciones a probar, en orden, para cada plantilla (la IA revisa cada una). */
+export function layoutCandidates(template: Template, position: "auto" | Layout): Layout[] {
+  if (position !== "auto") return [position]
+  return template === "etiqueta" ? ["top", "bottom"] : ["bottom", "top"]
+}
 export const TEMPLATES: Template[] = ["banda", "etiqueta", "firma", "none"]
 
 const ASSETS = join(fileURLToPath(new URL(".", import.meta.url)), "..", "assets")
@@ -129,10 +136,12 @@ export async function renderOverlay(opts: {
   width: number
   height: number
   story: boolean
+  layout?: Layout
 }): Promise<Buffer | null> {
   const kit = KITS[opts.brand]
   if (!kit || opts.template === "none") return null
   const { width: W, height: H } = opts
+  const top = opts.layout === "top"
   const text = (kit.uppercase ? opts.text.toUpperCase() : opts.text).trim()
   const safeTop = opts.story ? H * 0.14 : W * 0.05
   const safeBottom = opts.story ? H * 0.2 : W * 0.05
@@ -149,22 +158,27 @@ export async function renderOverlay(opts: {
 
   let body: El
   if (opts.template === "banda" && text) {
-    body = el("div", { width: W, height: H, flexDirection: "column", justifyContent: "flex-end", paddingBottom: safeBottom - W * 0.05 }, [
+    body = el("div", {
+      width: W,
+      height: H,
+      flexDirection: "column",
+      justifyContent: top ? "flex-start" : "flex-end",
+      ...(top ? { paddingTop: safeTop - W * 0.05 } : { paddingBottom: safeBottom - W * 0.05 }),
+    }, [
       el("div", { width: W, alignItems: "center", gap: pad * 0.6, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
         el("div", { flex: 1 }, [title(kit.text)]),
         await signature(kit, logoSize),
       ]),
     ])
   } else if (opts.template === "etiqueta" && text) {
-    body = el("div", { width: W, height: H, flexDirection: "column", justifyContent: "space-between", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [
-      el("div", { alignSelf: "flex-start", maxWidth: W * 0.82, padding: `${pad * 0.35}px ${pad * 0.55}px`, borderRadius: W * 0.025, backgroundColor: kit.label.bg }, [
-        title(kit.label.text, titleSize * 0.85),
-      ]),
-      el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize)]),
+    const label = el("div", { alignSelf: "flex-start", maxWidth: W * 0.82, padding: `${pad * 0.35}px ${pad * 0.55}px`, borderRadius: W * 0.025, backgroundColor: kit.label.bg }, [
+      title(kit.label.text, titleSize * 0.85),
     ])
+    const sign = el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize)])
+    body = el("div", { width: W, height: H, flexDirection: "column", justifyContent: "space-between", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, top ? [label, sign] : [sign, label])
   } else {
     // firma (o banda/etiqueta sin texto): solo el logo abajo a la derecha.
-    body = el("div", { width: W, height: H, justifyContent: "flex-end", alignItems: "flex-end", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [
+    body = el("div", { width: W, height: H, justifyContent: "flex-end", alignItems: top ? "flex-start" : "flex-end", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [
       await signature(kit, logoSize),
     ])
   }

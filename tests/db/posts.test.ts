@@ -102,7 +102,13 @@ describe("editar algo aprobado lo devuelve a aprobación", () => {
   })
 
   it("cambiar el texto sobre la imagen, la plantilla o la música de un post aprobado", async () => {
-    for (const cambio of ["overlay_text = 'Tres onigiris'", "template = 'banda'", "music_key = 'music/fasutofudo/lofi.mp3'"]) {
+    for (const cambio of [
+      "overlay_text = 'Tres onigiris'",
+      "template = 'banda'",
+      "music_key = 'music/fasutofudo/lofi.mp3'",
+      "overlay_position = 'top'",
+      "overlay_layout = 'top'",
+    ]) {
       const { postId } = await crearPostFasutofudo(db)
       await aprobar(postId)
       await db.query(`update cos_posts set ${cambio} where id = $1`, [postId])
@@ -113,7 +119,7 @@ describe("editar algo aprobado lo devuelve a aprobación", () => {
   it("rehacer la imagen final (render_key) NO desaprueba: es derivada del contenido", async () => {
     const { postId } = await crearPostFasutofudo(db)
     await aprobar(postId)
-    await db.query(`update cos_posts set render_key = 'renders/x.jpg' where id = $1`, [postId])
+    await db.query(`update cos_posts set render_key = 'renders/x.jpg', render_qa = '{"ok":true}' where id = $1`, [postId])
     expect((await estado(db, postId)).status).toBe("APPROVED")
   })
 

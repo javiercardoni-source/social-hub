@@ -1,5 +1,7 @@
 "use client"
 
+import { explicarError } from "@/lib/ui-errors"
+
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, RefreshCw } from "lucide-react"
@@ -27,7 +29,7 @@ export function ProbarConexion() {
               router.refresh()
               setMsg("Listo")
             } catch (e) {
-              setMsg(e instanceof Error ? e.message : String(e))
+              setMsg(explicarError(e))
             }
           })
         }

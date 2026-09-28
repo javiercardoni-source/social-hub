@@ -82,16 +82,22 @@ export async function editarPost(
   overlay = "",
   template = "none",
   music: string | null = null,
+  position: "auto" | "top" | "bottom" = "auto",
 ) {
   await requireMember("editor")
   if (caption.length + hashtags.length > 2200) throw new Error("El texto supera los 2200 caracteres de Instagram")
   if (!TEMPLATES.includes(template)) throw new Error("Plantilla inválida")
+  if (!["auto", "top", "bottom"].includes(position)) throw new Error("Posición inválida")
   const db = createAdminClient()
-  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, cos_brands(slug)").eq("id", postId).single()
+  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, cos_brands(slug)").eq("id", postId).single()
   const slug = (before?.cos_brands as unknown as { slug: string } | null)?.slug
   // Solo temas de la biblioteca de ESA marca.
   if (music && !music.startsWith(`music/${slug}/`)) throw new Error("Tema de música inválido")
-  const visualChanged = before?.overlay_text !== overlay.trim() || before?.template !== template || (before?.music_key ?? null) !== music
+  const visualChanged =
+    before?.overlay_text !== overlay.trim() ||
+    before?.template !== template ||
+    (before?.music_key ?? null) !== music ||
+    before?.overlay_position !== position
   const { data, error } = await db
     .from("cos_posts")
     .update({
@@ -100,8 +106,10 @@ export async function editarPost(
       overlay_text: overlay.trim().slice(0, 80),
       template,
       music_key: music,
-      // La pieza final vieja ya no corresponde: el worker arma la nueva.
-      ...(visualChanged ? { render_key: null } : {}),
+      overlay_position: position,
+      // La pieza vieja ya no corresponde: el worker arma la nueva y la vuelve a revisar.
+      // Si Javier eligió posición a mano, esa es la posición; en "auto" la decide la revisión.
+      ...(visualChanged ? { render_key: null, render_qa: null, overlay_layout: position === "auto" ? null : position } : {}),
     })
     .eq("id", postId)
     .eq("status", "PENDING_APPROVAL")
@@ -125,6 +133,11 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
 
   const target = cuando ? new Date(cuando) : null
   if (target && Number.isNaN(target.getTime())) throw new Error("Fecha inválida")
+
+  // Se aprueba lo que se vio: si la pieza final todavía se está armando o revisando, no se aprueba
+  // (si no, se publicaría una versión que nadie miró).
+  const { data: pieza } = await db.from("cos_posts").select("render_qa").eq("id", postId).single()
+  if (!pieza?.render_qa) throw new Error("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
   // "Ya" (o una fecha que está encima) se deja 2 min adelante para que el reloj no lo dé
   // por vencido mientras se aprueba; igual se encola ya mismo (abajo).
   const publishNow = !target || target.getTime() <= Date.now() + 2 * 60_000
@@ -257,4 +270,35 @@ export async function rehacerConIA(postIds: string[], pedido: string, otroDiseno
     },
   })
   if (je) throw new Error(`No se pudo pedir: ${je.message}`)
+}
+
+// ── fechas especiales propias (F4) ───────────────────────────────────────────
+
+export async function agregarFecha(input: { day: string; name: string; brandId: string | null; hint: string }) {
+  const member = await requireMember("editor")
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.day)) throw new Error("Fecha inválida")
+  const name = input.name.trim()
+  if (name.length < 2 || name.length > 80) throw new Error("El nombre tiene que tener entre 2 y 80 caracteres")
+  const db = createAdminClient()
+  const { error } = await db.from("cos_special_days").insert({
+    day: input.day,
+    name,
+    kind: input.brandId ? "marca" : "evento",
+    brand_id: input.brandId,
+    source: "manual",
+    hint: input.hint.trim().slice(0, 300) || null,
+    created_by: member.userId,
+  })
+  if (error) throw new Error(/duplicate|unique/i.test(error.message) ? "Esa fecha ya está cargada" : `No se pudo guardar: ${error.message}`)
+  revalidatePath("/calendar")
+}
+
+export async function borrarFecha(id: string) {
+  await requireMember("editor")
+  const db = createAdminClient()
+  // Solo las cargadas a mano: los feriados y las fechas curadas se mantienen solos.
+  const { data, error } = await db.from("cos_special_days").delete().eq("id", id).eq("source", "manual").select("id")
+  if (error) throw new Error(`No se pudo borrar: ${error.message}`)
+  if (!data?.length) throw new Error("Solo se pueden borrar las fechas cargadas a mano")
+  revalidatePath("/calendar")
 }

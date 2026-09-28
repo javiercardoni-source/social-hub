@@ -1,5 +1,7 @@
 "use client"
 
+import { explicarError } from "@/lib/ui-errors"
+
 import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -30,7 +32,25 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
   const firstOpen = modulos.find((m) => m.status === "in_progress") ?? modulos.find((m) => m.status === "pending") ?? modulos[0]
   const [activo, setActivo] = useState<string>(firstOpen.id)
   const [vista, setVista] = useState<"chat" | "brandbook">("chat")
-  const [texto, setTexto] = useState("")
+  const [texto, setTextoState] = useState("")
+  // Borrador en el navegador: si falla el envío o se cierra la pestaña, la respuesta no se pierde.
+  const draftKey = `cos-marca-borrador:${brandName}:${activo}`
+  const setTexto = (v: string) => {
+    setTextoState(v)
+    try {
+      if (v) localStorage.setItem(draftKey, v)
+      else localStorage.removeItem(draftKey)
+    } catch {}
+  }
+  const [draftFor, setDraftFor] = useState<string | null>(null)
+  if (draftFor !== draftKey) {
+    setDraftFor(draftKey)
+    let saved = ""
+    try {
+      saved = localStorage.getItem(draftKey) ?? ""
+    } catch {}
+    setTextoState(saved)
+  }
   const [error, setError] = useState<string | null>(null)
   const [pending, start] = useTransition()
   const [bb, setBb] = useState(brandbook ?? "")
@@ -50,14 +70,15 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
     setBb(brandbook ?? "")
   }
 
-  function run(fn: () => Promise<unknown>) {
+  function run(fn: () => Promise<unknown>, onOk?: () => void) {
     setError(null)
     start(async () => {
       try {
         await fn()
+        onOk?.()
         router.refresh()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        setError(explicarError(e))
       }
     })
   }
@@ -65,8 +86,8 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
   function enviar() {
     const t = texto.trim()
     if (!t) return
-    setTexto("")
-    run(() => turnoEntrevista(m.id, t))
+    // El texto se borra recién cuando quedó guardado.
+    run(() => turnoEntrevista(m.id, t), () => setTexto(""))
   }
 
   return (

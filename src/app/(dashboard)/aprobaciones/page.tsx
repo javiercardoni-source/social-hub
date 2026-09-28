@@ -2,6 +2,8 @@ import { requireMember } from "@/lib/cos/auth"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { signedUrls } from "@/lib/cos/storage"
 import { getActiveBrand } from "@/lib/cos/brand"
+import { suggestionsFor } from "@/lib/cos/analytics"
+import { liftText } from "../../../../shared/cos/timing"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { ListaAprobaciones, type Grupo } from "./aprobaciones-client"
 
@@ -9,6 +11,8 @@ export const dynamic = "force-dynamic"
 
 type RawPost = {
   id: string
+  account_id: string
+  brand_id: string
   caption: string
   hashtags: string
   platform: "instagram" | "facebook"
@@ -19,6 +23,8 @@ type RawPost = {
   template: string
   render_key: string | null
   music_key: string | null
+  overlay_position: "auto" | "top" | "bottom"
+  render_qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -51,7 +57,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -87,6 +93,16 @@ export default async function AprobacionesPage() {
     musicBySlug[slug] = keys.map((k) => ({ key: k, name: k.split("/").pop()!.replace(/\.[a-z0-9]+$/, "").replace(/-/g, " "), url: signed[k] ?? null }))
   }
 
+  // Mejores horarios según lo que ya rindió cada cuenta en cada formato (motor F1).
+  const sugerencias = await suggestionsFor(
+    db,
+    [...new Map(posts.map((p) => [`${p.account_id}:${p.post_type}`, { accountId: p.account_id, brandId: p.brand_id, format: p.post_type }])).values()],
+  ).catch((e) => {
+    // Sin sugerencias se puede aprobar igual; el error queda en el log del servidor.
+    console.error("sugerencias de horario:", e)
+    return {} as Awaited<ReturnType<typeof suggestionsFor>>
+  })
+
   const grupos = new Map<string, Grupo>()
   for (const p of posts) {
     const media = [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]
@@ -119,6 +135,15 @@ export default async function AprobacionesPage() {
       scheduledAt: p.scheduled_at,
       overlayText: p.overlay_text,
       musicKey: p.music_key,
+      position: p.overlay_position,
+      qa: p.render_qa,
+      suggestions: (sugerencias[`${p.account_id}:${p.post_type}`]?.slots ?? []).map((x) => ({
+        at: x.at,
+        label: x.label,
+        lift: liftText(x.lift),
+        up: x.lift >= 1,
+        confianza: x.confianza,
+      })),
       template: p.template,
       renderUrl: p.render_key ? (urls[p.render_key] ?? null) : null,
       accountName: p.cos_social_accounts?.display_name ?? p.cos_brands?.name ?? "",

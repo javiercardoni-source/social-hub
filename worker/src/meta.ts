@@ -256,3 +256,10 @@ export async function deleteRemote(remoteId: string, token: string): Promise<"de
     throw e
   }
 }
+
+// ── Lectura genérica (métricas) ─────────────────────────────────────────────
+
+/** GET a la Graph API (lo usa la recolección de métricas). Mismos errores que el resto. */
+export function graphGet<T>(path: string, token: string, params: Record<string, string> = {}): Promise<T> {
+  return graph<T>("GET", path, token, params)
+}

@@ -9,6 +9,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { Clock, CheckCircle, AlertCircle, XCircle, ExternalLink, Images } from "lucide-react"
 import { AccionesPost } from "./acciones-post"
+import { AgregarFecha, BorrarFecha } from "./fechas"
+import { isDeliveryDay, weatherText } from "../../../../shared/cos/special-days"
 
 export const dynamic = "force-dynamic"
 
@@ -73,6 +75,16 @@ export default async function CalendarioPage() {
   const { data, error } = await query
   if (error) throw new Error(`No se pudo cargar el calendario: ${error.message}`)
   const rows = (data ?? []) as unknown as PostRow[]
+
+  // F4: clima de 7 días y fechas especiales de los próximos 30 (globales y de la marca).
+  const today = new Date(new Date().getTime() - 3 * 3600_000).toISOString().slice(0, 10)
+  const in30 = new Date(new Date().getTime() + 30 * 86_400_000).toISOString().slice(0, 10)
+  let fq = db.from("cos_special_days").select("id, day, name, kind, source, hint, brand_id, cos_brands(name, color)").gte("day", today).lte("day", in30).order("day")
+  fq = brand ? fq.or(`brand_id.is.null,brand_id.eq.${brand.id}`) : fq
+  const [{ data: fechasRaw }, { data: clima }] = await Promise.all([fq, db.from("cos_weather_daily").select("day, code, tmax, tmin, rain_prob").gte("day", today).order("day").limit(7)])
+  const fechas = (fechasRaw ?? []) as unknown as { id: string; day: string; name: string; kind: string; source: string; hint: string | null; cos_brands: { name: string; color: string } | null }[]
+  const diaCorto = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
+  const KIND: Record<string, string> = { feriado: "Feriado", puente: "Puente", especial: "Fecha especial", marca: "De la marca", evento: "Evento" }
 
   const thumbOf = (p: PostRow) => p.cos_post_media.find((m) => m.position === 0)?.cos_asset_versions?.cos_assets?.thumb_key ?? null
   const thumbs = await signedUrls(rows.map(thumbOf).filter(Boolean) as string[])
@@ -168,6 +180,62 @@ export default async function CalendarioPage() {
         description={`${upcoming.length} por salir · ${published.length} publicados${problems.length ? ` · ${problems.length} con problemas` : ""}${brand ? ` · ${brand.name}` : ""}`}
       />
       <div className="space-y-8 p-4 md:p-6">
+        {(clima?.length ?? 0) > 0 && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">Clima en Buenos Aires</h2>
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+              {clima!.map((w) => {
+                const deliv = isDeliveryDay(w)
+                return (
+                  <div key={w.day} className={`rounded-xl border p-2 text-center text-xs ${deliv ? "border-sky-300 bg-sky-50" : ""}`}>
+                    <p className="font-semibold capitalize">{diaCorto(w.day)}</p>
+                    <p className="text-muted-foreground">{weatherText(w.code)}</p>
+                    <p className="font-bold">
+                      {Math.round(Number(w.tmax))}° / {Math.round(Number(w.tmin))}°
+                    </p>
+                    <p className="text-muted-foreground">💧 {w.rain_prob ?? 0}%</p>
+                    {deliv && <p className="mt-0.5 font-bold text-sky-700">día de delivery</p>}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
+              Próximas fechas (30 días) <span className="font-normal">({fechas.length})</span>
+            </h2>
+            <AgregarFecha brandId={brand?.id ?? null} brandName={brand?.name ?? null} />
+          </div>
+          {fechas.length === 0 ? (
+            <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">Sin fechas especiales en los próximos 30 días.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {fechas.map((f) => (
+                <div key={f.id} className="flex items-start gap-3 rounded-xl border bg-card px-3 py-2 text-sm">
+                  <span className="w-24 shrink-0 font-semibold capitalize">{diaCorto(f.day)}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">
+                      {f.name}{" "}
+                      <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{KIND[f.kind] ?? f.kind}</span>
+                      {f.cos_brands && (
+                        <span className="ml-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: f.cos_brands.color }} />
+                          {f.cos_brands.name}
+                        </span>
+                      )}
+                    </p>
+                    {f.hint && <p className="text-xs text-muted-foreground">Idea: {f.hint}</p>}
+                  </div>
+                  {f.source === "manual" && <BorrarFecha id={f.id} />}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         {problems.length > 0 && section("Necesitan tu atención", problems, "")}
         {section("Por salir", upcoming, "Nada programado. Aprobá publicaciones en Aprobaciones.")}
         {section("Publicados", published, "Todavía no se publicó nada.")}

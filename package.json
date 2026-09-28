@@ -13,7 +13,9 @@
     "db:migrate": "node scripts/migrate.mjs --via-cli",
     "db:migrate:dry": "node scripts/migrate.mjs --via-cli --dry-run",
     "predeploy": "npm run typecheck && npm run lint && npm test && npm run build",
-    "worker": "node --env-file=.env.local worker/src/main.ts"
+    "worker": "node --env-file=.env.local worker/src/main.ts",
+    "gauntlet": "npm run typecheck && npm run lint && npm test && npm run build",
+    "gauntlet:prod": "node --env-file=.env.local scripts/gauntlet-prod.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
@@ -48,6 +50,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
     "pg": "^8.23.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.0.2"

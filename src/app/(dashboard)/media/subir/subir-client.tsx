@@ -1,5 +1,7 @@
 "use client"
 
+import { explicarError } from "@/lib/ui-errors"
+
 import { useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -49,7 +51,7 @@ export function SubirClient({ brands, defaultSlug }: { brands: Brand[]; defaultS
       if ("error" in reg) throw new Error(reg.error)
       setStep("listo")
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(explicarError(e))
       setStep("idle")
     }
   }
