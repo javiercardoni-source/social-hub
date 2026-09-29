@@ -78,16 +78,17 @@ export const KITS: Record<string, Kit> = {
     logo: { file: "bijutsukan/logo.png", round: false, aspect: 600 / 171 },
     defaultTemplate: "firma",
   },
-  // Brandbook 28-09-2026 (Javier: "chau naranja"): marfil, negro, rojo profundo y dorado;
-  // títulos en sans condensada bold. Sin logo oficial todavía → firma con el nombre.
+  // Sistema de sus placas de Canva ("abril 2026", aplicado 29-09-2026): fondo negro, título blanco
+  // en condensada gruesa (Oswald Bold), recuadro blanco con texto gris y textos chicos en
+  // Montserrat Light. Sin logo oficial todavía → firma con el nombre.
   sensaciones: {
     font: { name: "Oswald", file: "oswald-latin-700-normal.woff", weight: 700 },
-    small: { name: "Montserrat", file: "montserrat-latin-600-normal.woff", weight: 600 },
+    small: { name: "Montserrat Light", file: "montserrat-latin-300-normal.woff", weight: 400 },
     uppercase: true,
     spacing: 0.02,
-    text: "#F7F6F2",
-    band: "rgba(17,17,17,0.88)",
-    label: { bg: "#C53030", text: "#F7F6F2" },
+    text: "#FFFFFF",
+    band: "rgba(0,0,0,0.82)",
+    label: { bg: "#FFFFFF", text: "#3F3F3F" },
     wordmark: "Sensaciones de Oriente",
     defaultTemplate: "etiqueta",
   },

@@ -109,5 +109,5 @@ export const VISUAL_BASELINE: Record<string, string> = {
   bijutsukan:
     "Detectado en su Instagram: logo BIJUTSUKAN en letras altas y finas con '— DELIVERY —' espaciado debajo (hoy usamos Bebas Neue); solo blanco y negro. Fotos: fondo oscuro, pizarra negra, flores, guante negro, piezas en primer plano; casi sin texto sobre la imagen.",
   sensaciones:
-    "Detectado en su Instagram: no tiene logo visible (la foto de perfil es un roll con palitos); los posts recientes parecen fotos de banco, sin texto ni marca. DECIDIDO por Javier (28-09-2026): se abandona el naranja de la web vieja. Paleta: marfil #F7F6F2, negro #111111, rojo profundo #C53030, dorado suave #C9A96E. Títulos en sans condensada bold (Oswald), textos en Montserrat. Sin logo oficial todavía: se firma con el nombre.",
+    "Detectado en su Instagram: no tiene logo visible (la foto de perfil es un roll con palitos); los posts recientes parecen fotos de banco, sin texto ni marca. DECIDIDO por Javier (29-09-2026): el sistema de sus placas de Canva 'abril 2026'. Fondo negro (o foto oscura), títulos en blanco en condensada gruesa (Oswald Bold), precio grande, recuadro blanco con texto gris oscuro espaciado, pie en Montserrat Light con letras muy separadas. Nada de naranja. Sin logo oficial todavía: se firma con el nombre.",
 }
