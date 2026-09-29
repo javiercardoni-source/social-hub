@@ -343,10 +343,12 @@ function GrupoCard({ g }: { g: Grupo }) {
 
           {p.campaign?.startsWith("feriado:") && (
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
-              <b>Historia de feriado</b> · {new Date(`${p.campaign.split(":")[1]}T12:00:00Z`).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" })}
+              <b>Historia de feriado</b> ({new Date(`${p.campaign.split(":")[1]}T12:00:00Z`).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" })})
               {" · "}
-              {esNavidadOAnioNuevo(p.campaign.split(":")[1]) ? "saludo (ese día no se trabaja)" : p.campaign.split(":")[2] === "1" ? "la primera (reservá con tiempo)" : "la segunda (a último momento)"}
-              . Viene programada para ese día: cambiá el
+              {esNavidadOAnioNuevo(p.campaign.split(":")[1])
+                ? "saludo (ese día no se trabaja)"
+                : ({ "1": "1 de 3: se abren las reservas (48 h antes)", "2": "2 de 3: último día para reservar (24 h antes)", "3": "3 de 3: a último momento (el feriado)" } as Record<string, string>)[p.campaign.split(":")[2]] ?? ""}
+              . Ya viene programada: cambiá el
               horario si querés. Si no la aprobás antes, se vence sola.
             </div>
           )}

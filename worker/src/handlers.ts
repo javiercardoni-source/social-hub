@@ -45,7 +45,7 @@ import {
 } from "./meta.ts"
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
 import { fullCaption } from "../../shared/cos/caption.ts"
-import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
+import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
 
 export type HandlerContext = {
@@ -846,6 +846,8 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
     for (const d of dias) {
       for (const h of planFeriado(d.day, abre)) {
         const campaign = campaniaFeriado(d.day, h.orden)
+        // Si ya pasó su momento (el feriado se cargó tarde), esa historia no se arma.
+        if (new Date(horaBA(diasAntesDe(d.day, h.diasAntes), h.hora)).getTime() < Date.now() + 30 * 60_000) continue
         const { data: existe } = await db.from("cos_posts").select("id").eq("brand_id", b.id).eq("campaign", campaign).maybeSingle()
         if (existe) continue
 
@@ -892,7 +894,7 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
             template: ["firma", "none"].includes(plantilla) ? "etiqueta" : plantilla,
             music_key: music.length ? music[Math.floor(Math.random() * music.length)] : null,
             campaign,
-            scheduled_at: horaBA(d.day, h.hora),
+            scheduled_at: horaBA(diasAntesDe(d.day, h.diasAntes), h.hora),
             status: "DRAFT",
           })
           .select("id")
