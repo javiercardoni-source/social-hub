@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { AlertTriangle, CheckCircle, Circle, Loader2, RefreshCw, Trash2, Upload } from "lucide-react"
+import { AlertTriangle, CheckCircle, Circle, Loader2, Play, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { createClient } from "@/lib/supabase/client"
@@ -36,7 +36,7 @@ const ACEPTA: Record<KindMotor, string> = {
 }
 
 /** Botón que abre el selector de archivos, sube directo a cos-media y registra. */
-function Subir({ kind, etiqueta, multiple, note, onDone, variant = "outline" }: { kind: KindMotor; etiqueta: string; multiple?: boolean; note?: string; onDone: (msg: string) => void; variant?: "outline" | "default" }) {
+function Subir({ kind, etiqueta, multiple, note, onDone, variant = "outline", tile }: { kind: KindMotor; etiqueta: string; multiple?: boolean; note?: string; onDone: (msg: string) => void; variant?: "outline" | "default"; tile?: boolean }) {
   const ref = useRef<HTMLInputElement>(null)
   const [pending, start] = useTransition()
   const [progreso, setProgreso] = useState<string | null>(null)
@@ -84,10 +84,22 @@ function Subir({ kind, etiqueta, multiple, note, onDone, variant = "outline" }: 
           })
         }}
       />
-      <Button size="sm" variant={variant} disabled={pending} onClick={() => ref.current?.click()}>
-        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-        {progreso ?? etiqueta}
-      </Button>
+      {tile ? (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => ref.current?.click()}
+          className="flex aspect-square flex-col items-center justify-center gap-1 bg-muted text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+        >
+          {pending ? <Loader2 className="h-7 w-7 animate-spin" /> : <Plus className="h-8 w-8" />}
+          <span className="px-2 text-center text-[11px] font-semibold">{progreso ?? etiqueta}</span>
+        </button>
+      ) : (
+        <Button size="sm" variant={variant} disabled={pending} onClick={() => ref.current?.click()}>
+          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {progreso ?? etiqueta}
+        </Button>
+      )}
     </>
   )
 }
@@ -148,73 +160,126 @@ function FichaVista({ f }: { f: Ficha }) {
   )
 }
 
-function Referencia({ r, onMsg }: { r: Insumo; onMsg: (m: string) => void }) {
+/**
+ * Referencias como el feed de un perfil de Instagram: grilla de 3 columnas, lo más nuevo
+ * primero, un cuadro «+» para agregar y ✕ para sacar. Tocando una se ve grande con su ficha.
+ */
+function FeedReferencias({ brandName, refs, nota, onMsg }: { brandName: string; refs: Insumo[]; nota: string; onMsg: (m: string) => void }) {
   const router = useRouter()
   const [pending, start] = useTransition()
-  const [abierta, setAbierta] = useState(false)
-  const run = (fn: () => Promise<unknown>) =>
+  const [abierta, setAbierta] = useState<string | null>(null)
+  const r = refs.find((x) => x.id === abierta) ?? null
+  const run = (fn: () => Promise<unknown>, after?: () => void) =>
     start(async () => {
       try {
         await fn()
+        after?.()
         router.refresh()
       } catch (e) {
         onMsg(explicarError(e))
       }
     })
+  const borrar = (x: Insumo) => confirm(`¿Sacar «${x.name}» de las referencias?`) && run(() => borrarMotor(x.id), () => setAbierta(null))
+
   return (
-    <div className="overflow-hidden rounded-xl border bg-background">
-      <div className="flex gap-3 p-2.5">
-        <div className="h-24 w-16 shrink-0 overflow-hidden rounded-md bg-muted">
-          {r.url &&
-            (r.mime.startsWith("video/") ? (
-              <video src={r.url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={r.url} alt="" className="h-full w-full object-cover" />
-            ))}
+    <div className="mx-auto w-full max-w-xl overflow-hidden rounded-2xl border bg-background">
+      {/* Cabecera de perfil */}
+      <div className="flex items-center gap-3 border-b px-4 py-3">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-tr from-amber-400 via-pink-500 to-purple-600 p-[2px]">
+          <div className="flex h-full w-full items-center justify-center rounded-full bg-background text-sm font-extrabold">{brandName.slice(0, 1)}</div>
         </div>
-        <div className="min-w-0 flex-1 space-y-1 text-xs">
-          <p className="truncate font-semibold">{r.name}</p>
-          {r.note && <p className="text-muted-foreground">Te gusta: {r.note}</p>}
-          {r.status === "analizando" && (
-            <p className="flex items-center gap-1 text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> La IA la está analizando…
-            </p>
-          )}
-          {r.status === "error" && (
-            <p className="flex items-center gap-1 text-destructive">
-              <AlertTriangle className="h-3 w-3" /> No se pudo analizar: {r.error}
-            </p>
-          )}
-          {r.status === "lista" && r.analysis && (
-            <>
-              <p className="line-clamp-2 text-muted-foreground">{r.analysis.resumen}</p>
-              <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setAbierta((x) => !x)}>
-                {abierta ? "Ocultar ficha de estilo" : "Ver ficha de estilo"}
-              </button>
-            </>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-col gap-1">
-          {r.status !== "analizando" && (
-            <button type="button" aria-label="Volver a analizar" disabled={pending} className="rounded p-1.5 text-muted-foreground hover:bg-muted" onClick={() => run(() => reanalizarReferencia(r.id))}>
-              <RefreshCw className="h-4 w-4" />
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label="Borrar referencia"
-            disabled={pending}
-            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-            onClick={() => confirm("¿Borrar esta referencia?") && run(() => borrarMotor(r.id))}
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+        <div className="text-sm">
+          <p className="font-semibold">{brandName} · estilo</p>
+          <p className="text-xs text-muted-foreground">
+            {refs.length} referencias · {refs.filter((x) => x.status === "lista").length} con ficha
+          </p>
         </div>
       </div>
-      {abierta && r.analysis && (
-        <div className="border-t bg-muted/30 p-3">
-          <FichaVista f={r.analysis} />
+
+      {/* Grilla */}
+      <div className="grid grid-cols-3 gap-0.5 bg-border">
+        <Subir kind="referencia" etiqueta="Agregar" multiple note={nota} tile onDone={onMsg} />
+        {refs.map((x) => (
+          <div key={x.id} className="group relative aspect-square bg-muted">
+            <button type="button" onClick={() => setAbierta(x.id)} className="block h-full w-full" aria-label={`Ver ${x.name}`}>
+              {x.url &&
+                (x.mime.startsWith("video/") ? (
+                  <video src={x.url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={x.url} alt="" className="h-full w-full object-cover" loading="lazy" />
+                ))}
+            </button>
+            {x.mime.startsWith("video/") && <Play className="pointer-events-none absolute left-1.5 top-1.5 h-4 w-4 fill-white text-white drop-shadow" />}
+            {x.status === "analizando" && (
+              <span className="pointer-events-none absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+                <Loader2 className="h-3 w-3 animate-spin" /> analizando
+              </span>
+            )}
+            {x.status === "error" && (
+              <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">sin ficha</span>
+            )}
+            <button
+              type="button"
+              aria-label={`Sacar ${x.name}`}
+              disabled={pending}
+              onClick={() => borrar(x)}
+              className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white opacity-90 transition hover:bg-red-600 sm:opacity-0 sm:group-hover:opacity-100"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Detalle: la referencia grande con su ficha */}
+      {r && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onClick={() => setAbierta(null)}>
+          <div className="grid max-h-[92vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-background md:grid-cols-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-center bg-black">
+              {r.url &&
+                (r.mime.startsWith("video/") ? (
+                  <video src={r.url} className="max-h-[50vh] w-full object-contain md:max-h-[92vh]" controls playsInline autoPlay muted loop />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={r.url} alt="" className="max-h-[50vh] w-full object-contain md:max-h-[92vh]" />
+                ))}
+            </div>
+            <div className="flex min-h-0 flex-col">
+              <div className="flex items-start justify-between gap-2 border-b p-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{r.name}</p>
+                  {r.note && <p className="text-xs text-muted-foreground">Te gusta: {r.note}</p>}
+                </div>
+                <button type="button" aria-label="Cerrar" className="rounded p-1 hover:bg-muted" onClick={() => setAbierta(null)}>
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {r.status === "analizando" && (
+                  <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> La IA está armando la ficha de estilo…
+                  </p>
+                )}
+                {r.status === "error" && (
+                  <p className="flex items-center gap-1.5 text-sm text-destructive">
+                    <AlertTriangle className="h-4 w-4" /> No se pudo analizar: {r.error}
+                  </p>
+                )}
+                {r.status === "lista" && r.analysis && <FichaVista f={r.analysis} />}
+              </div>
+              <div className="flex gap-2 border-t p-3">
+                {r.status !== "analizando" && (
+                  <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => reanalizarReferencia(r.id))}>
+                    <RefreshCw className="h-3.5 w-3.5" /> Volver a analizar
+                  </Button>
+                )}
+                <Button size="sm" variant="destructive" className="ml-auto" disabled={pending} onClick={() => borrar(r)}>
+                  <Trash2 className="h-3.5 w-3.5" /> Sacar
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -302,18 +367,11 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
             <input
               value={nota}
               onChange={(e) => setNota(e.target.value)}
-              placeholder="Opcional: qué te gusta (ej: los cortes rápidos al ritmo, el texto grande)"
+              placeholder="Opcional, antes de agregar: qué te gusta (ej: los cortes rápidos, el texto grande)"
               className="min-w-[240px] flex-1 rounded-lg border bg-background px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-primary/40"
             />
-            <Subir kind="referencia" etiqueta="Subir referencias" multiple note={nota} variant="default" onDone={(m) => (setMsg(m), setNota(""))} />
           </div>
-          {refs.length > 0 && (
-            <div className="grid gap-2 xl:grid-cols-2">
-              {refs.map((r) => (
-                <Referencia key={r.id} r={r} onMsg={setMsg} />
-              ))}
-            </div>
-          )}
+          <FeedReferencias brandName={brandName} refs={refs} nota={nota} onMsg={(m) => (setMsg(m), setNota(""))} />
         </Seccion>
 
         <Seccion
