@@ -621,6 +621,7 @@ const renderPost: Handler = async (job, { db, log }) => {
     if (p.overlay_layout && p.render_qa) {
       const key = await ensureRender(db, p)
       if (key !== p.render_key) await setPost(db, postId, { render_key: key })
+      await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
       return
     }
     const r = await renderReviewed(db, p, s.ai_model)
@@ -629,6 +630,8 @@ const renderPost: Handler = async (job, { db, log }) => {
       now.template !== p.template || now.overlay_text !== p.overlay_text || now.music_key !== p.music_key || now.overlay_position !== p.overlay_position
     if (changed) continue
     await setPost(db, postId, { render_key: r.key, overlay_layout: r.layout, render_qa: r.qa })
+    // La primera vez que queda lista, el borrador pasa a verse en Aprobaciones (nunca se borra).
+    await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
     log("pieza final lista", { post: postId, key: r.key, layout: r.layout, qa: r.qa })
     return
   }

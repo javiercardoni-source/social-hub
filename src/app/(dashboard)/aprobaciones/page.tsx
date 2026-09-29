@@ -5,7 +5,7 @@ import { getActiveBrand } from "@/lib/cos/brand"
 import { suggestionsFor } from "@/lib/cos/analytics"
 import { liftText } from "../../../../shared/cos/timing"
 import { PageHeader } from "@/components/dashboard/page-header"
-import { ListaAprobaciones, type Grupo } from "./aprobaciones-client"
+import { ListaAprobaciones, Preparando, type Grupo } from "./aprobaciones-client"
 
 export const dynamic = "force-dynamic"
 
@@ -25,6 +25,7 @@ type RawPost = {
   music_key: string | null
   overlay_position: "auto" | "top" | "bottom"
   render_qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
+  first_render_at: string | null
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -49,6 +50,11 @@ type RawPost = {
 // Orden en que se muestran los formatos dentro de una misma subida.
 const ORDER = ["instagram:feed", "instagram:reel", "instagram:carousel", "instagram:story", "facebook:feed", "facebook:reel"]
 
+/** ¿Pasaron más de `min` minutos desde `iso`? (fuera del componente: la hora actual no es "pura") */
+function haceMasDe(iso: string, min: number) {
+  return Date.now() - new Date(iso).getTime() > min * 60_000
+}
+
 export default async function AprobacionesPage() {
   await requireMember("approver")
   const db = createAdminClient()
@@ -57,7 +63,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -103,12 +109,22 @@ export default async function AprobacionesPage() {
     return {} as Awaited<ReturnType<typeof suggestionsFor>>
   })
 
+  // Una subida se muestra recién cuando todas sus piezas finales estuvieron listas alguna vez
+  // (así no aparece "a medio editar"). Si algo se traba más de 10 min, se muestra igual.
+  const preparando = new Set<string>()
+  const trabado = (p: (typeof posts)[number]) => haceMasDe(p.created_at, 10)
+  for (const p of posts) {
+    const k = [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions?.cos_assets?.id ?? p.id
+    if (!p.first_render_at && !trabado(p)) preparando.add(k)
+  }
+
   const grupos = new Map<string, Grupo>()
   for (const p of posts) {
     const media = [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]
     const v = media?.cos_asset_versions
     const asset = v?.cos_assets
     const key = asset?.id ?? p.id
+    if (preparando.has(key)) continue
     if (!grupos.has(key)) {
       grupos.set(key, {
         key,
@@ -165,6 +181,7 @@ export default async function AprobacionesPage() {
         }
       />
       <div className="p-4 md:p-6">
+        {preparando.size > 0 && <Preparando cantidad={preparando.size} />}
         <ListaAprobaciones grupos={lista} />
       </div>
     </>

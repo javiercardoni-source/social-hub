@@ -2,7 +2,7 @@
 
 import { explicarError } from "@/lib/ui-errors"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { aprobarPost, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
 import { Button } from "@/components/ui/button"
@@ -634,6 +634,24 @@ function GrupoCard({ g }: { g: Grupo }) {
         </div>
       </div>
     </Card>
+  )
+}
+
+/**
+ * Aviso de lo que la IA todavía está armando. Mientras haya algo, la página se actualiza sola
+ * cada 15 s: cada subida aparece recién cuando sus piezas finales están listas.
+ */
+export function Preparando({ cantidad }: { cantidad: number }) {
+  const router = useRouter()
+  useEffect(() => {
+    const t = setInterval(() => router.refresh(), 15_000)
+    return () => clearInterval(t)
+  }, [router])
+  return (
+    <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      {cantidad === 1 ? "1 subida se está preparando" : `${cantidad} subidas se están preparando`}: la IA arma y revisa las piezas finales. Aparecen acá solas en uno o dos minutos.
+    </div>
   )
 }
 
