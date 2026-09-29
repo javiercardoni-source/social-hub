@@ -20,13 +20,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
-import { compactVideo, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { classify, writeCaption } from "./ai.ts"
+import { compactVideo, framesAt, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
+import { analyzeReference, classify, writeCaption } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
-import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
+import { ensureRender, exists, loadRenderPost, renderReviewed } from "./render.ts"
 import { syncAccount } from "./metrics.ts"
-import { arDay, contextForBrand, syncContext } from "./context.ts"
+import { arDay, climaParaHoy, contextForBrand, syncContext } from "./context.ts"
 import { datosParaIA, normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
 import { ingestTurnos } from "./turnos.ts"
 import { defaultTemplate, type Template } from "./overlay.ts"
@@ -302,13 +302,17 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     description: a.description ?? "",
     aiSummary: a.ai_json?.summary ?? "",
     context: await contextForBrand(db, a.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
+    clima: await climaParaHoy(db, a.brand_id).catch((e) => (log("sin clima", { error: String(e) }), null)),
   })
   const caption = `${c.hook.trim()}\n${c.caption.trim()}`
   const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
 
   // Un borrador por formato: se aprueban (o rechazan) por separado. La historia va sin texto.
   const brandSlug = (await brandContext(db, a.brand_id)).slug
-  const overlay = c.overlay.replace(/[#\p{Extended_Pictographic}]/gu, "").trim().slice(0, 60)
+  const limpiar = (x: string) => x.replace(/[#\p{Extended_Pictographic}]/gu, "").trim().slice(0, 60)
+  const overlay = limpiar(c.overlay)
+  // La frase del clima va solo en la historia (regla de Javier); el resto lleva la frase normal.
+  const overlayClima = limpiar(c.overlay_clima ?? "")
   const template = defaultTemplate(brandSlug)
   // Foto + biblioteca de música de la marca → todo sale con música: en Instagram va como reel
   // (que también aparece en el feed) en vez de post de foto, porque Meta no deja música en fotos.
@@ -340,9 +344,11 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
           post_type: f.post_type,
           caption: f.caption,
           hashtags: f.hashtags,
-          overlay_text: overlay,
-          template,
+          overlay_text: f.post_type === "story" && overlayClima ? overlayClima : overlay,
+          // Si la plantilla de la marca no lleva texto (firma), la historia del clima usa etiqueta.
+          template: f.post_type === "story" && overlayClima && ["firma", "none"].includes(template) ? "etiqueta" : template,
           music_key: withMusic && !(f.platform === "instagram" && f.post_type === "feed") ? pick : null,
+          uses_weather: c.usa_clima || (f.post_type === "story" && !!overlayClima),
           status: "DRAFT",
         })
         .select("id")
@@ -550,7 +556,8 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
     // Posts de un solo archivo: se publica la pieza final (la misma que se vio al aprobar).
     let prepared: { items: MediaItem[]; staged: string[] }
     const rp = p.post_type === "carousel" ? null : await loadRenderPost(db, p.id)
-    const key = rp ? await ensureRender(db, rp) : null
+    // Se publica la pieza que se aprobó, tal cual (aunque después cambie la tipografía o el logo).
+    const key = rp ? (rp.render_key && (await exists(db, rp.render_key)) ? rp.render_key : await ensureRender(db, rp)) : null
     if (rp && key) {
       const kind = key.endsWith(".mp4") ? "video" : "photo"
       prepared = { items: [{ kind, url: await supabaseStorage(db).signedUrl(key, 3600) }], staged: [] }
@@ -1018,6 +1025,40 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
   log("base de fotos: traído al Archivo", { brand: brandId, file: fileId, asset: asset.id })
 }
 
+// ── ref:analyze (Marca → Motores) ───────────────────────────────────────────
+/** Ficha de estilo de una referencia: cortes medidos con ffmpeg + lectura de la IA. */
+const analyzeRef: Handler = async (job, { db, log }) => {
+  const id = idFrom(job, "ref_id")
+  const { data: r, error } = await db.from("cos_brand_assets").select("id, brand_id, kind, storage_key, mime, note").eq("id", id).single()
+  if (error || !r) return log("referencia borrada antes de analizarse", { ref: id })
+  if (r.kind !== "referencia") return
+  try {
+    const original = await supabaseStorage(db).download(r.storage_key)
+    const esVideo = r.mime.startsWith("video/")
+    const { frames, duracion, cortes } = await withTmp(async (dir) => {
+      const f = await writeTmp(dir, esVideo ? "ref.mp4" : "ref", original)
+      if (!esVideo) return { frames: [{ at: null, data: await toJpeg(f, dir) }], duracion: null, cortes: null }
+      const info = await probe(f, r.mime)
+      const dur = (info.durationMs ?? 0) / 1000
+      const cuts = await sceneCuts(f)
+      // 10 cuadros parejos a lo largo del video (la IA los ve en orden, con su segundo).
+      const n = Math.min(10, Math.max(3, Math.ceil(dur)))
+      const times = Array.from({ length: n }, (_, i) => (dur * (i + 0.5)) / n)
+      const imgs = await framesAt(f, times, dir)
+      return { frames: imgs.map((data, i) => ({ at: times[i], data })), duracion: dur, cortes: cuts }
+    })
+    const s = await settings(db)
+    const ficha = await analyzeReference({ db, model: s.ai_model, brand: await brandContext(db, r.brand_id), frames, duracion, cortes, nota: r.note })
+    const medidas = duracion != null ? { duracion_s: Math.round(duracion * 10) / 10, cortes: cortes!.length, toma_promedio_s: Math.round((duracion / (cortes!.length + 1)) * 10) / 10 } : null
+    await db.from("cos_brand_assets").update({ status: "lista", analysis: { ...ficha, medidas }, error: null }).eq("id", id)
+    log("referencia analizada", { ref: id, cortes: cortes?.length ?? null })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await db.from("cos_brand_assets").update({ status: "error", error: msg.slice(0, 300) }).eq("id", id)
+    throw e
+  }
+}
+
 // ── ingest:turnos (F3) ─────────────────────────────────────────────────────
 const ingestTurnosJob: Handler = async (_job, { db, queue, log }) => {
   const r = await ingestTurnos(db, queue, log)
@@ -1138,6 +1179,7 @@ export const handlers: Record<string, Handler> = {
   "context:sync": syncContextJob,
   "archive:import-ig": importInstagram,
   "archive:scan-drive": scanDrive,
+  "ref:analyze": analyzeRef,
   "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,

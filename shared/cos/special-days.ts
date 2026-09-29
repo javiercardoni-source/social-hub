@@ -56,3 +56,28 @@ export function isDeliveryDay(w: { code: number; tmax: number | null; tmin: numb
   const hot = w.tmax != null && w.tmax >= 33
   return wet || cold || hot
 }
+
+export type Clima = { code: number; tmax: number | null; tmin?: number | null; rain_prob: number | null }
+export type ClimaCategoria = "tormenta" | "lluvia" | "frio" | "calor" | "soleado" | "nublado"
+
+/** El clima agrupado en lo que cambia el mensaje (no el código exacto del pronóstico). */
+export function climaCategoria(w: Clima): ClimaCategoria {
+  if (w.code >= 95) return "tormenta"
+  if ((w.code >= 51 && w.code <= 67) || (w.code >= 80 && w.code <= 82) || (w.rain_prob ?? 0) >= 60) return "lluvia"
+  if (w.tmax != null && w.tmax <= 12) return "frio"
+  if (w.tmax != null && w.tmax >= 30) return "calor"
+  if (w.code <= 1) return "soleado"
+  return "nublado"
+}
+
+/**
+ * ¿Se puede usar el clima hoy? (regla de Javier, 29-09-2026)
+ * - Solo si cambió respecto de ayer: el segundo día seguido de lluvia ya no es noticia.
+ * - Como mucho una vez por día por marca (`yaUsadoHoy`).
+ * Sin dato de ayer, cuenta como cambio.
+ */
+export function climaUsable(hoy: Clima | null | undefined, ayer: Clima | null | undefined, yaUsadoHoy: boolean): boolean {
+  if (!hoy || yaUsadoHoy) return false
+  if (!ayer) return true
+  return climaCategoria(hoy) !== climaCategoria(ayer)
+}

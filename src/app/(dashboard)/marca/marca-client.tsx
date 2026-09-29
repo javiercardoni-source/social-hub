@@ -7,10 +7,11 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { armarBrandbook, aprobarBrandbook, guardarBrandbook, reabrirModulo, turnoEntrevista } from "@/lib/cos/branding-actions"
-import { BookOpen, CheckCircle, Circle, CircleDot, ClipboardList, Loader2, Send, Sparkles } from "lucide-react"
+import { BookOpen, CheckCircle, Circle, CircleDot, ClipboardList, Loader2, Send, Sparkles, Wand2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { DatosVigentes } from "../../../../shared/cos/datos-vigentes"
 import { DatosVigentesForm } from "./datos-vigentes"
+import { Motores, type Insumo, type Tema } from "./motores"
 
 export type ModuloEstado = {
   id: string
@@ -29,13 +30,15 @@ type Props = {
   brandbookStatus: "none" | "draft" | "approved"
   datos: DatosVigentes
   datosAt: string | null
+  insumos: Insumo[]
+  musica: Tema[]
 }
 
-export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt }: Props) {
+export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt, insumos, musica }: Props) {
   const router = useRouter()
   const firstOpen = modulos.find((m) => m.status === "in_progress") ?? modulos.find((m) => m.status === "pending") ?? modulos[0]
   const [activo, setActivo] = useState<string>(firstOpen.id)
-  const [vista, setVista] = useState<"chat" | "brandbook" | "datos">("chat")
+  const [vista, setVista] = useState<"chat" | "brandbook" | "datos" | "motores">("chat")
   const [texto, setTextoState] = useState("")
   // Borrador en el navegador: si falla el envío o se cierra la pestaña, la respuesta no se pierde.
   const draftKey = `cos-marca-borrador:${brandName}:${activo}`
@@ -62,6 +65,9 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
 
   const m = modulos.find((x) => x.id === activo)!
   const cerrados = modulos.filter((x) => x.status === "done").length
+  const listosMotores =
+    [insumos.some((i) => i.kind === "referencia" && i.status === "lista"), ...(["fuente_titulo", "fuente_texto", "logo"] as const).map((k) => insumos.some((i) => i.kind === k))].filter(Boolean).length +
+    (musica.length ? 1 : 0)
 
   useEffect(() => {
     fin.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -163,10 +169,24 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
             </span>
           </button>
           <p className="mt-2 px-1 text-[11px] leading-snug text-muted-foreground">Precios, combos, promos, horarios y links de hoy.</p>
+          <button
+            type="button"
+            onClick={() => setVista("motores")}
+            className={cn("mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm", vista === "motores" ? "bg-primary/10 font-bold text-primary" : "hover:bg-muted")}
+          >
+            <Wand2 className="h-4 w-4" />
+            <span className="flex-1">Motores visuales</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", listosMotores === 5 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+              {listosMotores}/5
+            </span>
+          </button>
+          <p className="mt-2 px-1 text-[11px] leading-snug text-muted-foreground">Referencias de estilo, tipografías, logo y sonido.</p>
         </Card>
       </div>
 
-      {vista === "datos" ? (
+      {vista === "motores" ? (
+        <Motores brandName={brandName} insumos={insumos} musica={musica} />
+      ) : vista === "datos" ? (
         <DatosVigentesForm brandName={brandName} datos={datos} actualizado={datosAt} />
       ) : vista === "chat" ? (
         <Card className="flex min-h-[70vh] flex-col overflow-hidden">

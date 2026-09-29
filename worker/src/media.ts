@@ -263,3 +263,26 @@ export async function compactVideo(video: Buffer, dir: string): Promise<Buffer |
   }
   return null
 }
+
+/**
+ * Momentos de corte de un video (segundos), medidos con la detección de escenas de ffmpeg.
+ * Es el dato duro del "ritmo de edición" de una referencia.
+ */
+export async function sceneCuts(file: string, threshold = 0.3): Promise<number[]> {
+  const { stderr } = await run("ffmpeg", ["-hide_banner", "-i", file, "-vf", `select='gt(scene,${threshold})',showinfo`, "-an", "-f", "null", "-"], {
+    timeout: 5 * 60_000,
+    maxBuffer: 32 * 1024 * 1024,
+  })
+  return [...stderr.matchAll(/pts_time:([\d.]+)/g)].map((m) => Number(m[1])).filter((t) => t > 0.05)
+}
+
+/** Cuadros en momentos dados (segundos), a 768 px: para que la IA "vea" el video en orden. */
+export async function framesAt(file: string, times: number[], dir: string): Promise<Buffer[]> {
+  const out: Buffer[] = []
+  for (const [i, t] of times.entries()) {
+    const f = join(dir, `ref-${i}.jpg`)
+    await run("ffmpeg", ["-y", "-ss", t.toFixed(2), "-i", file, "-frames:v", "1", "-vf", "scale='min(768,iw)':-2", "-q:v", "4", f], { timeout: FF_TIMEOUT_MS })
+    out.push(await readFile(f))
+  }
+  return out
+}

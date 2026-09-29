@@ -18,6 +18,17 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 export type Template = "none" | "banda" | "etiqueta" | "firma"
+
+/**
+ * Tipografías y logo propios de la marca (Marca → Motores). Reemplazan a los del KIT; lo que
+ * no se cargó sigue como estaba. `version` entra en la clave de la pieza: si cambian, se rearma.
+ */
+export type CustomKit = {
+  version: string
+  title?: { name: string; data: Buffer }
+  text?: { name: string; data: Buffer }
+  logo?: { data: Buffer; aspect: number }
+}
 export type Layout = "top" | "bottom"
 
 /** Posiciones a probar, en orden, para cada plantilla (la IA revisa cada una). */
@@ -104,12 +115,12 @@ async function logoData(file: string) {
   return logoCache.get(file)!
 }
 
-async function signature(kit: Kit, size: number): Promise<El> {
+async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El> {
   if (kit.logo) {
     const w = kit.logo.round ? size : size * 1.9
     const h = kit.logo.round ? size : w / kit.logo.aspect
     return el("img", { width: w, height: h, borderRadius: kit.logo.round ? size / 2 : 0, boxShadow: "0 4px 18px rgba(0,0,0,0.35)" }, undefined, {
-      src: await logoData(kit.logo.file),
+      src: logoSrc ?? (await logoData(kit.logo.file)),
       width: w,
       height: h,
     })
@@ -138,9 +149,18 @@ export async function renderOverlay(opts: {
   height: number
   story: boolean
   layout?: Layout
+  custom?: CustomKit
 }): Promise<Buffer | null> {
-  const kit = KITS[opts.brand]
-  if (!kit || opts.template === "none") return null
+  const base = KITS[opts.brand]
+  if (!base || opts.template === "none") return null
+  const c = opts.custom
+  const kit: Kit = {
+    ...base,
+    ...(c?.title ? { font: { name: c.title.name, file: "", weight: 400 as const } } : {}),
+    ...(c?.text ? { small: { name: c.text.name, file: "", weight: 400 as const } } : {}),
+    ...(c?.logo ? { logo: { file: "", round: false, aspect: c.logo.aspect }, wordmark: undefined } : {}),
+  }
+  const logoSrc = c?.logo ? `data:image/png;base64,${c.logo.data.toString("base64")}` : undefined
   const { width: W, height: H } = opts
   const top = opts.layout === "top"
   const text = (kit.uppercase ? opts.text.toUpperCase() : opts.text).trim()
@@ -171,29 +191,29 @@ export async function renderOverlay(opts: {
       kit.logo
         ? el("div", { width: W, alignItems: "center", gap: pad * 0.6, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
             el("div", { flex: 1 }, [title(kit.text)]),
-            await signature(kit, logoSize),
+            await signature(kit, logoSize, logoSrc),
           ])
         : el("div", { width: W, flexDirection: "column", alignItems: "flex-start", gap: pad * 0.35, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
             title(kit.text),
-            await signature(kit, logoSize * 0.8),
+            await signature(kit, logoSize * 0.8, logoSrc),
           ]),
     ])
   } else if (opts.template === "etiqueta" && text) {
     const label = el("div", { alignSelf: "flex-start", maxWidth: W * 0.82, padding: `${pad * 0.35}px ${pad * 0.55}px`, borderRadius: W * 0.025, backgroundColor: kit.label.bg }, [
       title(kit.label.text, titleSize * 0.85),
     ])
-    const sign = el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize)])
+    const sign = el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize, logoSrc)])
     body = el("div", { width: W, height: H, flexDirection: "column", justifyContent: "space-between", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, top ? [label, sign] : [sign, label])
   } else {
     // firma (o banda/etiqueta sin texto): solo el logo abajo a la derecha.
     body = el("div", { width: W, height: H, justifyContent: "flex-end", alignItems: top ? "flex-start" : "flex-end", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [
-      await signature(kit, logoSize),
+      await signature(kit, logoSize, logoSrc),
     ])
   }
 
   const fonts = [
-    { name: kit.font.name, data: await font(kit.font.file), weight: kit.font.weight, style: "normal" as const },
-    { name: kit.small.name, data: await font(kit.small.file), weight: kit.small.weight, style: "normal" as const },
+    { name: kit.font.name, data: c?.title?.data ?? (await font(kit.font.file)), weight: kit.font.weight, style: "normal" as const },
+    { name: kit.small.name, data: c?.text?.data ?? (await font(kit.small.file)), weight: kit.small.weight, style: "normal" as const },
   ]
   const svg = await satori(body as never, { width: W, height: H, fonts })
   return Buffer.from(new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng())

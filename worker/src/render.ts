@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError } from "./queue.ts"
 import { storageFor, supabaseStorage } from "./storage.ts"
 import { compositePhoto, finishVideo, fitForInstagramFeed, fitForStory, photoToReel, probe, toJpeg, withTmp, writeTmp } from "./media.ts"
-import { layoutCandidates, renderOverlay, type Layout, type Template } from "./overlay.ts"
+import { layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
 import { reviewPiece, type PieceReview } from "./ai.ts"
 
 // Subir este número vuelve a generar todas las piezas (si cambia el diseño de las plantillas).
@@ -28,6 +28,8 @@ export type RenderPost = {
   /** Posición resuelta (la eligió la revisión visual o Javier). Sin resolver = abajo. */
   overlay_layout: Layout | null
   brand_slug: string
+  /** Tipografías y logo que cargó Javier en Marca → Motores (si hay). */
+  kit?: CustomKit
   version: { id: string; storage_driver: string; storage_key: string | null; drive_file_id: string | null; mime: string | null }
 }
 
@@ -46,13 +48,13 @@ export function renderKey(p: RenderPost): string | null {
   // Un video sin plantilla ni música se publica tal cual: no hay nada que armar.
   if (isVideo && p.template === "none" && !p.music_key) return null
   const h = createHash("sha256")
-    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom"].join("\x1f"))
+    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom", p.kit?.version ?? ""].join("\x1f"))
     .digest("hex")
     .slice(0, 16)
   return `renders/${p.id}/${h}.${rendersVideo(p) ? "mp4" : "jpg"}`
 }
 
-async function exists(db: SupabaseClient, key: string) {
+export async function exists(db: SupabaseClient, key: string) {
   const dir = key.slice(0, key.lastIndexOf("/"))
   const name = key.slice(key.lastIndexOf("/") + 1)
   const { data } = await db.storage.from("cos-media").list(dir, { search: name, limit: 1 })
@@ -81,17 +83,17 @@ export async function ensureRender(db: SupabaseClient, p: RenderPost): Promise<s
     const f = await writeTmp(dir, isVideo ? "in.mp4" : "in", original)
     if (isVideo) {
       const info = await probe(f, v.mime)
-      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story: story || reel, layout: p.overlay_layout ?? "bottom" })
+      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story: story || reel, layout: p.overlay_layout ?? "bottom", custom: p.kit })
       return finishVideo({ video: original, layer, music, dir })
     }
     if (rendersVideo(p)) {
       const base = await fitForStory(f, dir)
-      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: 1080, height: 1920, story: true, layout: p.overlay_layout ?? "bottom" })
+      const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: 1080, height: 1920, story: true, layout: p.overlay_layout ?? "bottom", custom: p.kit })
       return photoToReel({ photo9x16: base, layer, music, seconds: PHOTO_REEL_SECONDS, dir })
     }
     const base = story ? await fitForStory(f, dir) : igFeed ? await fitForInstagramFeed(f, dir) : await toJpeg(f, dir)
     const info = await probe(await writeTmp(dir, "fit.jpg", base), "image/jpeg")
-    const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story, layout: p.overlay_layout ?? "bottom" })
+    const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story, layout: p.overlay_layout ?? "bottom", custom: p.kit })
     return layer ? compositePhoto(base, layer, dir) : base
   })
 
@@ -144,7 +146,7 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
   const { data, error } = await db
     .from("cos_posts")
     .select(
-      `id, status, platform, post_type, overlay_text, template, music_key, overlay_position, overlay_layout, render_key, render_qa, cos_brands(slug),
+      `id, status, platform, post_type, overlay_text, template, music_key, overlay_position, overlay_layout, render_key, render_qa, brand_id, cos_brands(slug),
        cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime))`,
     )
     .eq("id", postId)
@@ -162,10 +164,50 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
     overlay_layout: Layout | null
     render_key: string | null
     render_qa: unknown
+    brand_id: string
     cos_brands: { slug: string } | null
     cos_post_media: { position: number; cos_asset_versions: RenderPost["version"] | null }[]
   }
   const version = [...row.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions
   if (!version) throw new PermanentError("el post no tiene archivos")
-  return { ...row, brand_slug: row.cos_brands?.slug ?? "", version }
+  return { ...row, brand_slug: row.cos_brands?.slug ?? "", version, kit: await loadKit(db, row.brand_id) }
+}
+
+// ── Kit propio de la marca (Marca → Motores) ─────────────────────────────────
+const kitCache = new Map<string, { at: number; kit: CustomKit | undefined }>()
+const fileCache = new Map<string, Buffer>()
+
+/** Ancho/alto de un PNG (cabecera IHDR). */
+function pngAspect(png: Buffer): number {
+  if (png.length < 24 || png.toString("ascii", 1, 4) !== "PNG") throw new PermanentError("el logo no es un PNG")
+  const w = png.readUInt32BE(16)
+  const h = png.readUInt32BE(20)
+  if (!w || !h) throw new PermanentError("el logo tiene medidas inválidas")
+  return w / h
+}
+
+/** Tipografías y logo que cargó Javier. undefined = se usa el kit de siempre. Cache de 1 minuto. */
+export async function loadKit(db: SupabaseClient, brandId: string): Promise<CustomKit | undefined> {
+  const hit = kitCache.get(brandId)
+  if (hit && Date.now() - hit.at < 60_000) return hit.kit
+  const { data } = await db
+    .from("cos_brand_assets")
+    .select("id, kind, storage_key")
+    .eq("brand_id", brandId)
+    .in("kind", ["fuente_titulo", "fuente_texto", "logo"])
+    .order("kind")
+  let kit: CustomKit | undefined
+  if (data?.length) {
+    kit = { version: data.map((a) => a.id).join(".") }
+    for (const a of data) {
+      if (!fileCache.has(a.storage_key)) fileCache.set(a.storage_key, await supabaseStorage(db).download(a.storage_key))
+      const buf = fileCache.get(a.storage_key)!
+      // Nombre de familia propio: no choca con las tipografías del kit.
+      if (a.kind === "fuente_titulo") kit.title = { name: `Titulo-${a.id.slice(0, 8)}`, data: buf }
+      if (a.kind === "fuente_texto") kit.text = { name: `Texto-${a.id.slice(0, 8)}`, data: buf }
+      if (a.kind === "logo") kit.logo = { data: buf, aspect: pngAspect(buf) }
+    }
+  }
+  kitCache.set(brandId, { at: Date.now(), kit })
+  return kit
 }

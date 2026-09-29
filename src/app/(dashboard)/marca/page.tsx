@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { BRAND_MODULES } from "../../../../shared/cos/brand-modules"
 import { normalizarDatos } from "../../../../shared/cos/datos-vigentes"
+import { signedUrls } from "@/lib/cos/storage"
+import type { Insumo, Tema } from "./motores"
 import { MarcaClient, type ModuloEstado } from "./marca-client"
 
 export const dynamic = "force-dynamic"
@@ -32,6 +34,30 @@ export default async function MarcaPage() {
   ])
   if (error) throw new Error(`No se pudo cargar la entrevista: ${error.message}`)
 
+  // Motores visuales: referencias, tipografías, logo y biblioteca de sonido de la marca.
+  const [{ data: assets }, { data: temas }] = await Promise.all([
+    db.from("cos_brand_assets").select("id, kind, name, storage_key, mime, note, status, analysis, error").eq("brand_id", brand.id).order("created_at", { ascending: false }),
+    db.storage.from("cos-media").list(`music/${brand.slug}`, { limit: 200 }),
+  ])
+  const musicaKeys = (temas ?? []).filter((t) => /\.(mp3|m4a|wav|aac)$/i.test(t.name)).map((t) => `music/${brand.slug}/${t.name}`)
+  const urls = await signedUrls([...(assets ?? []).filter((a) => a.kind === "referencia").map((a) => a.storage_key), ...musicaKeys])
+  const insumos: Insumo[] = (assets ?? []).map((a) => ({
+    id: a.id,
+    kind: a.kind,
+    name: a.name,
+    url: urls[a.storage_key] ?? null,
+    mime: a.mime,
+    note: a.note,
+    status: a.status,
+    analysis: a.analysis,
+    error: a.error,
+  }))
+  const musica: Tema[] = musicaKeys.map((k) => ({
+    key: k,
+    name: k.split("/").pop()!.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").replace(/\s+[0-9a-f]{6}$/i, ""),
+    url: urls[k] ?? null,
+  }))
+
   const modulos: ModuloEstado[] = BRAND_MODULES.map((m) => {
     const r = rows?.find((x) => x.module === m.id)
     return {
@@ -59,6 +85,8 @@ export default async function MarcaPage() {
           brandbookStatus={(b?.brandbook_status as "none" | "draft" | "approved") ?? "none"}
           datos={normalizarDatos(b?.datos_vigentes)}
           datosAt={b?.datos_vigentes_at ?? null}
+          insumos={insumos}
+          musica={musica}
         />
       </div>
     </>

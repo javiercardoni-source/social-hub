@@ -3,7 +3,7 @@
  * y lo usa la IA al escribir: solo datos reales, nunca inventados.
  */
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { isDeliveryDay, specialDaysFor, weatherText } from "../../shared/cos/special-days.ts"
+import { climaUsable, isDeliveryDay, specialDaysFor, weatherText } from "../../shared/cos/special-days.ts"
 
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]
 /** Fecha YYYY-MM-DD en Buenos Aires (UTC−3 fijo). */
@@ -70,15 +70,17 @@ export async function syncContext(db: SupabaseClient) {
 }
 
 /**
- * Contexto real de hoy y mañana para la IA: fechas especiales (globales y de la marca) y clima.
+ * Contexto real de hoy y mañana para la IA: fechas especiales (globales y de la marca).
+ * El clima va aparte (climaParaHoy): solo se usa cuando la regla lo permite.
  * Devuelve "" si no hay nada que valga la pena.
  */
 export async function contextForBrand(db: SupabaseClient, brandId: string, from = new Date()): Promise<string> {
   const days = [0, 1, 2].map((n) => arDay(new Date(from.getTime() + n * 86_400_000)))
-  const [{ data: sd }, { data: wx }] = await Promise.all([
-    db.from("cos_special_days").select("day, name, kind, brand_id, hint").in("day", days).or(`brand_id.is.null,brand_id.eq.${brandId}`),
-    db.from("cos_weather_daily").select("day, code, tmax, tmin, rain_prob").in("day", days.slice(0, 2)),
-  ])
+  const { data: sd } = await db
+    .from("cos_special_days")
+    .select("day, name, kind, brand_id, hint")
+    .in("day", days)
+    .or(`brand_id.is.null,brand_id.eq.${brandId}`)
   const label = (day: string) => {
     const i = days.indexOf(day)
     const dow = DIAS[new Date(`${day}T12:00:00Z`).getUTCDay()]
@@ -86,9 +88,32 @@ export async function contextForBrand(db: SupabaseClient, brandId: string, from 
   }
   const lines: string[] = []
   for (const s of sd ?? []) lines.push(`- ${label(s.day)}: ${s.name}${s.hint ? ` — idea: ${s.hint}` : ""}`)
-  for (const w of wx ?? []) {
-    const deliv = isDeliveryDay(w) ? " → día de delivery" : ""
-    lines.push(`- Clima ${label(w.day)}: ${weatherText(w.code)}, máx ${Math.round(w.tmax)}°, mín ${Math.round(w.tmin)}°, lluvia ${w.rain_prob ?? 0}%${deliv}`)
-  }
   return lines.join("\n")
+}
+
+/**
+ * El clima de hoy para la IA, o null si no corresponde usarlo (regla de Javier):
+ * solo si cambió respecto de ayer y si la marca no lo usó en las últimas 20 horas.
+ */
+export async function climaParaHoy(db: SupabaseClient, brandId: string, from = new Date()): Promise<string | null> {
+  const hoy = arDay(from)
+  const ayer = arDay(new Date(from.getTime() - 86_400_000))
+  const desde = new Date(from.getTime() - 20 * 3600_000).toISOString()
+  const [{ data: wx }, { count }] = await Promise.all([
+    db.from("cos_weather_daily").select("day, code, tmax, tmin, rain_prob").in("day", [hoy, ayer]),
+    // Rechazados o cancelados no cuentan: ese clima nunca llegó a salir.
+    db
+      .from("cos_posts")
+      .select("id", { count: "exact", head: true })
+      .eq("brand_id", brandId)
+      .eq("uses_weather", true)
+      .not("status", "in", "(REJECTED,CANCELLED)")
+      .is("deleted_at", null)
+      .gte("created_at", desde),
+  ])
+  const h = wx?.find((w) => w.day === hoy)
+  const a = wx?.find((w) => w.day === ayer)
+  if (!h || !climaUsable(h, a, (count ?? 0) > 0)) return null
+  const deliv = isDeliveryDay(h) ? " (día de delivery: la gente se queda en casa)" : ""
+  return `Hoy en Buenos Aires: ${weatherText(h.code)}, máx ${Math.round(h.tmax)}°, mín ${Math.round(h.tmin)}°, lluvia ${h.rain_prob ?? 0}%${deliv}`
 }

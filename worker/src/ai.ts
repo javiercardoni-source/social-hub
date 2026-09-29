@@ -87,6 +87,13 @@ export const Caption = z.object({
         "PROHIBIDO afirmar hechos que no estén en la descripción: horarios, 'estamos abiertos', precios, promos, 'nuevo', envíos. " +
         "Única excepción: el nombre o el precio de un combo de DATOS COMERCIALES VIGENTES, tal cual, cuando la foto es claramente ese combo.",
     ),
+  overlay_clima: z
+    .string()
+    .describe(
+      "SOLO si te pasaron CLIMA DE HOY: frase MUY corta (2 a 6 palabras) para escribir sobre la HISTORIA que juegue con el clima " +
+        "(ej: 'Llueve: plan sushi en casa'). Sin emojis. Si no te pasaron clima, vacío.",
+    ),
+  usa_clima: z.boolean().describe("true si mencionaste el clima en el texto o en overlay_clima"),
   hook: z.string(),
   caption: z.string(),
   hashtags: z.array(z.string()),
@@ -108,8 +115,10 @@ export async function writeCaption(opts: {
   request?: string
   /** Versión anterior: al rehacer, la nueva tiene que ser distinta. */
   previous?: { caption: string; overlay: string }
-  /** Contexto real de hoy/mañana (fechas especiales y clima, F4). */
+  /** Contexto real de hoy/mañana (fechas especiales, F4). */
   context?: string
+  /** Clima de hoy, solo cuando la regla permite usarlo (climaParaHoy). */
+  clima?: string | null
 }): Promise<Caption> {
   const extra = [
     opts.context
@@ -117,6 +126,10 @@ export async function writeCaption(opts: {
         "promos, y no prometas nada por el clima: 'llueve, quedate adentro y pedí' está bien; 'llegamos rápido aunque llueva' NO):\n" +
         opts.context
       : "",
+    opts.clima
+      ? "CLIMA DE HOY (dato real). Usalo SOBRE TODO en overlay_clima (la frase de la historia). En el texto del post, " +
+        "solo si suma natural. Nunca prometas nada por el clima ('llegamos aunque llueva' NO):\n" + opts.clima
+      : "No hay clima para usar hoy: overlay_clima vacío y no menciones el clima.",
     opts.request?.trim() ? opts.request.trim() : "",
     opts.previous
       ? `Es un REHACER: proponé algo claramente distinto a la versión anterior (otro enfoque y otras palabras). ` +
@@ -205,4 +218,73 @@ export async function logUsage(
     post_id: x.postId ?? null,
   })
   if (error) console.error("no pude registrar el consumo de IA:", error.message)
+}
+
+export const FichaEstilo = z.object({
+  resumen: z.string().describe("Una o dos líneas: qué es y qué la hace reconocible"),
+  ritmo: z.string().describe("Ritmo de edición en palabras (ej: 'cortes cada 0,8 s, muy rápido, al pulso de la música'). Para placas: 'estática'"),
+  planos: z.array(z.string()).describe("Tipos de plano que usa (primerísimo primer plano del producto, cenital, plano de manos, etc.)"),
+  movimientos: z.array(z.string()).describe("Movimientos de cámara o efectos que se deducen de los cuadros (acercamiento, paneo, cámara en mano, cámara lenta…)"),
+  transiciones: z.array(z.string()).describe("Cómo pasa de una toma a otra (corte seco, barrido, zoom, fundido…); vacío si es placa"),
+  texto_en_pantalla: z.string().describe("Si usa texto: cuánto, dónde, cuándo aparece, cómo entra"),
+  tipografia: z.string().describe("Estilo de letra (ej: 'sans condensada muy gruesa, en mayúsculas, parecida a Anton/Oswald') y cómo se jerarquiza"),
+  paleta: z.array(z.string()).describe("Colores dominantes en HEX aproximado"),
+  estructura: z.array(z.string()).describe("Pasos de la pieza en orden (ej: '0-1 s: gancho con el producto', '…: precio', 'cierre: logo + llamado')"),
+  para_nuestras_piezas: z.array(z.string()).describe("Qué tomar de esta referencia para las piezas de la marca, concreto y aplicable"),
+  evitar: z.array(z.string()).describe("Qué NO copiar (por marca ajena, por no encajar con el brandbook, por alterar el producto)"),
+})
+export type FichaEstilo = z.infer<typeof FichaEstilo>
+
+/**
+ * Ficha de estilo de una referencia (video o placa) que cargó Javier en Marca → Motores.
+ * Los cortes vienen medidos por ffmpeg; la IA interpreta los cuadros en orden.
+ */
+export async function analyzeReference(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  frames: { at: number | null; data: Buffer }[]
+  duracion: number | null
+  cortes: number[] | null
+  nota: string | null
+}): Promise<FichaEstilo> {
+  const esVideo = opts.duracion != null
+  const datos = esVideo
+    ? `Es un VIDEO de ${opts.duracion!.toFixed(1)} s. Cortes medidos con ffmpeg: ${opts.cortes!.length} ` +
+      `(${opts.cortes!.length ? `en ${opts.cortes!.map((c) => c.toFixed(1)).join(", ")} s; toma promedio ${(opts.duracion! / (opts.cortes!.length + 1)).toFixed(1)} s` : "plano secuencia, sin cortes"}). ` +
+      `Te paso ${opts.frames.length} cuadros en orden, cada uno con su segundo.`
+    : "Es una PLACA (imagen fija)."
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 4000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...opts.frames.flatMap((f) => [
+            ...(f.at != null ? [{ type: "text" as const, text: `Segundo ${f.at.toFixed(1)}:` }] : []),
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: f.data.toString("base64") } },
+          ]),
+          {
+            type: "text",
+            text: [
+              "Sos director de arte y editor de video. Esta es una REFERENCIA DE ESTILO que el dueño eligió para inspirar las piezas de la marca.",
+              datos,
+              opts.nota ? `Lo que le gusta de esta referencia: "${opts.nota}"` : "",
+              "Armá la ficha de estilo. Reglas: describí lo que se VE (no inventes sonido ni cosas fuera de cuadro); los movimientos " +
+                "de cámara deducilos comparando cuadros seguidos y decí 'probable' si no es claro; la tipografía describila por estilo y " +
+                "nombrá la tipografía gratuita (Google Fonts) más parecida; nunca propongas alterar el producto de la marca.",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(FichaEstilo) },
+  })
+  await logUsage(opts.db, { purpose: "ref:analyze", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió una ficha válida (stop: ${response.stop_reason})`)
+  return response.parsed_output
 }
