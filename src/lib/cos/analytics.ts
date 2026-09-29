@@ -1,6 +1,8 @@
 import "server-only"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { slotModel, suggestSlots, type Format, type PerfPost, type SlotModel, type Sugerencia } from "../../../shared/cos/timing"
+import { openDays, slotModel, suggestSlots, type Format, type PerfPost, type SlotModel, type Sugerencia } from "../../../shared/cos/timing"
+
+export { openDays }
 
 export type MediaRow = {
   id: string
@@ -64,23 +66,6 @@ export function modelFor(
   // Las historias no se mezclan con posts (otra escala), aunque haya pocas.
   const pool = format === "story" ? sameFormat : mine.filter((m) => m.format !== "story")
   return { model: slotModel(toPerf(pool), 3, holidays), scope: "cuenta" }
-}
-
-/** "martes a sábado" → [2,3,4,5,6]. Sin dato, todos los días. */
-export function openDays(text: unknown): number[] | undefined {
-  if (typeof text !== "string") return undefined
-  const dias = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"]
-  const norm = text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
-  const m = norm.match(/(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\s+a\s+(domingo|lunes|martes|miercoles|jueves|viernes|sabado)/)
-  if (!m) return undefined
-  const a = dias.indexOf(m[1])
-  const b = dias.indexOf(m[2])
-  const out: number[] = []
-  for (let d = a; ; d = (d + 1) % 7) {
-    out.push(d)
-    if (d === b) break
-  }
-  return out
 }
 
 /** Sugerencias de horario por cuenta+formato, para Aprobaciones. */

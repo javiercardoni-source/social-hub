@@ -288,3 +288,32 @@ export async function analyzeReference(opts: {
   if (!response.parsed_output) throw new Error(`la IA no devolvió una ficha válida (stop: ${response.stop_reason})`)
   return response.parsed_output
 }
+
+export const FraseFeriado = z.object({
+  frase: z.string().describe("Frase para escribir sobre la HISTORIA: entre 3 y 9 palabras, sin hashtags ni emojis (salvo ':D' si la consigna lo pide)."),
+})
+
+/** Frase de una historia de feriado en la voz de la marca, siguiendo una consigna fija. */
+export async function writeHolidayPhrase(opts: { db: SupabaseClient; model: string; brand: BrandContext; consigna: string; feriado: string }): Promise<string> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content:
+          `Escribí la frase de una historia de Instagram para el feriado "${opts.feriado}".\n` +
+          `Consigna: ${opts.consigna}\n` +
+          "Reglas: castellano rioplatense y en la voz de la marca; neutral (nada de política, religión ni opiniones sobre la fecha); " +
+          "no inventes horarios, promos ni precios; máximo 60 caracteres.",
+      },
+    ],
+    output_config: { format: zodOutputFormat(FraseFeriado) },
+  })
+  await logUsage(opts.db, { purpose: "feriado:frase", model: opts.model, usage: response.usage })
+  // Las plantillas no dibujan emojis: se sacan siempre (el ":D" es texto y queda).
+  const frase = response.parsed_output?.frase.replace(/#\S+/g, "").replace(/\p{Extended_Pictographic}/gu, "").replace(/\s{2,}/g, " ").trim()
+  if (!frase) throw new Error(`la IA no devolvió la frase (stop: ${response.stop_reason})`)
+  return frase.slice(0, 60)
+}

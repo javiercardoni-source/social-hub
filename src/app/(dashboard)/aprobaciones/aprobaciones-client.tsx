@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { AlertTriangle, CheckCircle, Heart, Loader2, MessageCircle, Send, Bookmark, ThumbsUp, Share2, XCircle, CheckCheck, Sparkles, Volume2, VolumeX } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { esNavidadOAnioNuevo } from "../../../../shared/cos/feriados"
 
 export type PostItem = {
   id: string
@@ -18,6 +19,8 @@ export type PostItem = {
   platform: "instagram" | "facebook"
   postType: "feed" | "carousel" | "reel" | "story"
   scheduledAt: string | null
+  /** Borrador que armó el sistema solo (ej. "feriado:2026-11-23:1"). */
+  campaign: string | null
   overlayText: string
   musicKey: string | null
   position: "auto" | "top" | "bottom"
@@ -219,8 +222,18 @@ function GrupoCard({ g }: { g: Grupo }) {
       ]),
     ),
   )
-  const [cuando, setCuando] = useState<"ya" | "programar">("ya")
-  const [fecha, setFecha] = useState(() => toLocalInput(new Date(Date.now() + 24 * 3600_000)))
+  // Lo que ya viene con horario propuesto (historias de feriado) arranca programado para ese momento:
+  // un clic distraído en «Aprobar» no lo publica días antes.
+  const [inicial] = useState(() => {
+    const ahora = Date.now()
+    const propuesto = g.posts.find((x) => x.scheduledAt && new Date(x.scheduledAt).getTime() > ahora)?.scheduledAt
+    return {
+      cuando: (propuesto ? "programar" : "ya") as "ya" | "programar",
+      fecha: toLocalInput(propuesto ? new Date(propuesto) : new Date(ahora + 24 * 3600_000)),
+    }
+  })
+  const [cuando, setCuando] = useState<"ya" | "programar">(inicial.cuando)
+  const [fecha, setFecha] = useState(inicial.fecha)
   const [error, setError] = useState<string | null>(null)
   const [pending, start] = useTransition()
   const [rehacer, setRehacer] = useState<{ open: boolean; pedido: string; diseno: boolean; musica: boolean; trabajando: boolean }>({
@@ -327,6 +340,16 @@ function GrupoCard({ g }: { g: Grupo }) {
               </button>
             ))}
           </div>
+
+          {p.campaign?.startsWith("feriado:") && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+              <b>Historia de feriado</b> · {new Date(`${p.campaign.split(":")[1]}T12:00:00Z`).toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" })}
+              {" · "}
+              {esNavidadOAnioNuevo(p.campaign.split(":")[1]) ? "saludo (ese día no se trabaja)" : p.campaign.split(":")[2] === "1" ? "la primera (reservá con tiempo)" : "la segunda (a último momento)"}
+              . Viene programada para ese día: cambiá el
+              horario si querés. Si no la aprobás antes, se vence sola.
+            </div>
+          )}
 
           {/* Lo que mandó la cocina y alertas de la IA */}
           <div className="rounded-xl bg-muted/50 px-3 py-2 text-sm">

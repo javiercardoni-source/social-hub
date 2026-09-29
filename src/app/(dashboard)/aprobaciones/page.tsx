@@ -26,6 +26,7 @@ type RawPost = {
   overlay_position: "auto" | "top" | "bottom"
   render_qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   first_render_at: string | null
+  campaign: string | null
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -63,7 +64,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -149,6 +150,7 @@ export default async function AprobacionesPage() {
       platform: p.platform,
       postType: p.post_type,
       scheduledAt: p.scheduled_at,
+      campaign: p.campaign,
       overlayText: p.overlay_text,
       musicKey: p.music_key,
       position: p.overlay_position,

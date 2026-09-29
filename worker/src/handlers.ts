@@ -20,8 +20,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
-import { compactVideo, framesAt, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { analyzeReference, classify, writeCaption } from "./ai.ts"
+import { compactVideo, framesAt, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
+import { analyzeReference, classify, writeCaption, writeHolidayPhrase } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, exists, loadRenderPost, renderReviewed } from "./render.ts"
@@ -45,6 +45,8 @@ import {
 } from "./meta.ts"
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
 import { fullCaption } from "../../shared/cos/caption.ts"
+import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
+import { openDays } from "../../shared/cos/timing.ts"
 
 export type HandlerContext = {
   db: SupabaseClient
@@ -191,6 +193,8 @@ const processAsset: Handler = async (job, { db, queue, log }) => {
       .single(),
     "asset",
   )
+  // Las placas del sistema no se analizan ni se archivan: son un fondo de color.
+  if (a.source === "sistema") return log("placa del sistema lista", { asset: a.id })
   await queue.enqueue("asset:classify", { asset_id: a.id }, { dedupeKey: `classify:${a.id}` })
   // Lo que vino de la base de fotos ya está en Drive: no se copia otra vez.
   if (driveFromEnv() && a.source !== "drive") await queue.enqueue("asset:archive", { asset_id: a.id }, { dedupeKey: `archive:${a.id}` })
@@ -767,9 +771,143 @@ const syncMetrics: Handler = async (job, { db, queue, log }) => {
 }
 
 // ── context:sync (F4) ──────────────────────────────────────────────────────
-const syncContextJob: Handler = async (_job, { db, log }) => {
+const syncContextJob: Handler = async (_job, { db, queue, log }) => {
   const r = await syncContext(db)
   log("contexto sincronizado", r)
+  // Con los feriados al día, se arman (si falta) las historias de los próximos días.
+  await queue.enqueue("holiday:stories", {}, { dedupeKey: `feriados:${arDay(new Date())}` })
+}
+
+// ── holiday:stories ─────────────────────────────────────────────────────────
+/** Color de fondo de la placa de cada marca (cuando no hay foto buena). */
+const FONDO_PLACA: Record<string, string> = { fasutofudo: "#1C1917", bijutsukan: "#0A0A0A", sensaciones: "#111111" }
+
+/** Placa de fondo de la marca, como archivo del sistema. null si todavía se está preparando. */
+async function placaDeMarca(db: SupabaseClient, queue: Queue, brand: { id: string; slug: string }): Promise<string | null> {
+  const ext = `placa:${brand.slug}`
+  const { data: ya } = await db.from("cos_assets").select("id, status, current_version_id").eq("source", "sistema").eq("source_external_id", ext).maybeSingle()
+  if (ya) return ["READY", "IN_USE"].includes(ya.status) ? ya.current_version_id : null
+  const data = await withTmp((dir) => placaFondo(FONDO_PLACA[brand.slug] ?? "#111111", dir))
+  const key = `originals/${brand.slug}/sistema/placa-fondo.jpg`
+  await supabaseStorage(db).upload(key, data, "image/jpeg")
+  const { data: a, error } = await db
+    .from("cos_assets")
+    .insert({
+      brand_id: brand.id,
+      source: "sistema",
+      source_external_id: ext,
+      description: "Placa de fondo de la marca, para historias sin foto",
+      submitted_by_label: "Social Hub",
+      mime: "image/jpeg",
+      size_bytes: data.byteLength,
+      storage_driver: "supabase",
+      storage_key: key,
+      status: "NEW",
+      consent: "ok",
+    })
+    .select("id")
+    .single()
+  if (error || !a) throw new Error(`placa: ${error?.message}`)
+  await queue.enqueue("asset:process", { asset_id: a.id }, { dedupeKey: `process:${a.id}` })
+  return null
+}
+
+/**
+ * Historias de feriado (regla de Javier): para cada feriado de los próximos días, en las marcas
+ * que abren ese día, dos historias seguidas (reservá con tiempo + "a último momento también te
+ * esperamos"); el 25/12 y el 1/1, solo el saludo. Quedan en Aprobaciones YA PROGRAMADAS para ese
+ * día. Lo que no se aprobó a tiempo se vence solo.
+ */
+const holidayStories: Handler = async (_job, { db, queue, log }) => {
+  const hoy = arDay(new Date())
+  const hasta = arDay(new Date(Date.now() + DIAS_ANTICIPACION * 86_400_000))
+
+  // Lo que quedó sin aprobar y ya pasó, se vence (no se publica tarde).
+  const { data: vencidas } = await db
+    .from("cos_posts")
+    .update({ status: "EXPIRED" })
+    .like("campaign", "feriado:%")
+    .eq("status", "PENDING_APPROVAL")
+    .lt("scheduled_at", new Date().toISOString())
+    .select("id")
+  if (vencidas?.length) log("historias de feriado vencidas sin aprobar", { cantidad: vencidas.length })
+
+  const { data: dias } = await db.from("cos_special_days").select("day, name").in("kind", ["feriado", "puente"]).gt("day", hoy).lte("day", hasta).order("day")
+  if (!dias?.length) return
+  const s = await settings(db)
+  const { data: marcas } = await db.from("cos_brands").select("id, slug, rules_json").eq("active", true)
+  for (const b of marcas ?? []) {
+    const { data: ig } = await db.from("cos_social_accounts").select("id").eq("brand_id", b.id).eq("platform", "instagram").neq("status", "disabled").limit(1)
+    if (!ig?.length) continue
+    const abre = openDays((b.rules_json as { open_days?: string } | null)?.open_days)
+    const brand = await brandContext(db, b.id)
+    const music = await listMusic(db, b.slug)
+    const usadas = new Set<string>()
+    for (const d of dias) {
+      for (const h of planFeriado(d.day, abre)) {
+        const campaign = campaniaFeriado(d.day, h.orden)
+        const { data: existe } = await db.from("cos_posts").select("id").eq("brand_id", b.id).eq("campaign", campaign).maybeSingle()
+        if (existe) continue
+
+        // Fondo: la mejor foto sin usar de la marca (sin caras bloqueadas); si no hay, la placa.
+        const { data: fotos } = await db
+          .from("cos_assets")
+          .select("id, status, current_version_id")
+          .eq("brand_id", b.id)
+          .eq("media_type", "photo")
+          .in("status", ["READY", "IN_USE"])
+          .neq("consent", "blocked")
+          .neq("source", "sistema")
+          // Sin estado de revisión (cocina) o de archivo no descartado.
+          .or("review_status.is.null,review_status.neq.discarded")
+          .gte("quality_score", 70)
+          .order("status", { ascending: false }) // READY (sin usar) antes que IN_USE
+          .order("quality_score", { ascending: false })
+          .limit(30)
+        const foto = (fotos ?? []).find((f) => f.current_version_id && !usadas.has(f.id))
+        const version = foto?.current_version_id ?? (await placaDeMarca(db, queue, b))
+        if (!version) {
+          log("historia de feriado: la placa de fondo se está preparando, sigue en la próxima vuelta", { brand: b.slug, day: d.day })
+          continue
+        }
+        if (foto) usadas.add(foto.id)
+
+        const { consigna, respaldo } = consignaFeriado(h.tipo, d.name, d.day)
+        const frase = await writeHolidayPhrase({ db, model: s.ai_model, brand, consigna, feriado: d.name }).catch((e) => {
+          log("historia de feriado: la IA no escribió, va el texto de respaldo", { error: String(e) })
+          return respaldo
+        })
+        const plantilla = defaultTemplate(b.slug)
+        const { data: post, error } = await db
+          .from("cos_posts")
+          .insert({
+            brand_id: b.id,
+            account_id: ig[0].id,
+            platform: "instagram",
+            post_type: "story",
+            caption: "",
+            hashtags: "",
+            overlay_text: frase,
+            // Tiene que verse el texto: si la marca usa solo firma, va etiqueta.
+            template: ["firma", "none"].includes(plantilla) ? "etiqueta" : plantilla,
+            music_key: music.length ? music[Math.floor(Math.random() * music.length)] : null,
+            campaign,
+            scheduled_at: horaBA(d.day, h.hora),
+            status: "DRAFT",
+          })
+          .select("id")
+          .single()
+        if (error || !post) {
+          if (error?.code === "23505") continue // otra vuelta la creó justo antes
+          throw new Error(`historia de feriado: ${error?.message}`)
+        }
+        await must(db.from("cos_post_media").insert({ post_id: post.id, version_id: version, position: 0 }).select("post_id").single(), "archivo del post")
+        await setPost(db, post.id, { status: "PENDING_APPROVAL" })
+        await queue.enqueue("post:render", { post_id: post.id }, { dedupeKey: `render:${post.id}` })
+        log("historia de feriado lista para aprobar", { brand: b.slug, day: d.day, tipo: h.tipo, frase })
+      }
+    }
+  }
 }
 
 // ── archive:import-ig (F2) ─────────────────────────────────────────────────
@@ -1180,6 +1318,7 @@ export const handlers: Record<string, Handler> = {
   "archive:import-ig": importInstagram,
   "archive:scan-drive": scanDrive,
   "ref:analyze": analyzeRef,
+  "holiday:stories": holidayStories,
   "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,

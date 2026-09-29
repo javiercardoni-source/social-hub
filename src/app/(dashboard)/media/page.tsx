@@ -81,6 +81,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
     )
     .neq("status", "ARCHIVED")
     .is("review_status", null)
+    .neq("source", "sistema")
     .order("created_at", { ascending: false })
     .limit(60)
   if (brand) query = query.eq("brand_id", brand.id)

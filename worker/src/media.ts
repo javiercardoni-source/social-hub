@@ -286,3 +286,14 @@ export async function framesAt(file: string, times: number[], dir: string): Prom
   }
   return out
 }
+
+/** Placa de fondo 9:16 del color de la marca (con viñeta suave): para historias sin foto. */
+export async function placaFondo(hex: string, dir: string): Promise<Buffer> {
+  const out = join(dir, "placa.jpg")
+  await run(
+    "ffmpeg",
+    ["-y", "-f", "lavfi", "-i", `color=c=0x${hex.replace("#", "")}:s=1080x1920`, "-vf", "vignette=PI/5", "-frames:v", "1", "-q:v", "2", out],
+    { timeout: FF_TIMEOUT_MS },
+  )
+  return readFile(out)
+}

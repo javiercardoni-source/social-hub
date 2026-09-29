@@ -174,3 +174,20 @@ export function liftText(lift: number): string {
   if (Math.abs(p) < 3) return "como siempre"
   return `${p > 0 ? "+" : "−"}${Math.abs(p)} %`
 }
+
+/** "martes a sábado" → [2,3,4,5,6]. Sin dato, todos los días. */
+export function openDays(text: unknown): number[] | undefined {
+  if (typeof text !== "string") return undefined
+  const dias = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"]
+  const norm = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  const m = norm.match(/(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\s+a\s+(domingo|lunes|martes|miercoles|jueves|viernes|sabado)/)
+  if (!m) return undefined
+  const a = dias.indexOf(m[1])
+  const b = dias.indexOf(m[2])
+  const out: number[] = []
+  for (let d = a; ; d = (d + 1) % 7) {
+    out.push(d)
+    if (d === b) break
+  }
+  return out
+}
