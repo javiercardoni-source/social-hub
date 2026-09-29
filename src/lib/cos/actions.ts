@@ -1,6 +1,6 @@
 "use server"
 
-import { TANDAS, carpetaDeLink } from "../../../shared/cos/base-fotos"
+import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -363,13 +363,14 @@ export async function importarInstagram(brandId: string) {
 }
 
 /** Trae la próxima tanda de la base de fotos (Drive) de una marca. El worker elige y encola. */
-export async function traerDeBase(brandId: string, cantidad: number) {
+export async function traerDeBase(brandId: string, cantidad: number, tipo: TipoTanda = "todo") {
   await requireMember("approver")
   if (!TANDAS.includes(cantidad as (typeof TANDAS)[number])) throw aviso("Cantidad inválida")
+  if (!TIPOS.includes(tipo)) throw aviso("Tipo inválido")
   const db = createAdminClient()
   const { error } = await db.rpc("cos_enqueue_job", {
     p_type: "archive:scan-drive",
-    p_payload: { brand_id: brandId, limite: cantidad },
+    p_payload: { brand_id: brandId, limite: cantidad, tipo },
     p_run_at: new Date().toISOString(),
     p_dedupe_key: `scan-drive:${brandId}`,
   })

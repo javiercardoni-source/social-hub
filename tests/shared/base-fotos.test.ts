@@ -42,6 +42,15 @@ describe("elegirTanda", () => {
     expect(t.elegidos.map((x) => x.id)).toEqual(["3", "2"])
   })
 
+  it("puede traer solo fotos o solo videos", () => {
+    const archivos = [f("1"), f("2", { mimeType: "video/mp4" }), f("3", { mimeType: "video/quicktime" }), f("4", { mimeType: "image/png" })]
+    const soloVideos = elegirTanda(archivos, new Set(), new Set(), 10, "videos")
+    expect(soloVideos.elegidos.map((x) => x.id)).toEqual(["3", "2"])
+    expect([soloVideos.fotos, soloVideos.videos]).toEqual([2, 2])
+    expect(soloVideos.quedan).toBe(0)
+    expect(elegirTanda(archivos, new Set(), new Set(), 10, "fotos").elegidos.map((x) => x.id)).toEqual(["4", "1"])
+  })
+
   it("límite 0 no trae nada", () => {
     expect(elegirTanda([f("1")], new Set(), new Set(), 0).elegidos).toEqual([])
   })

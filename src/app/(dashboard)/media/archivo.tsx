@@ -45,6 +45,7 @@ export async function ArchivoView(props: {
   estado: "pendientes" | "usados"
   orden: "calidad" | "recientes"
   origen: Origen
+  tipo: "todo" | "fotos" | "videos"
 }) {
   const db = createAdminClient()
   let q = db
@@ -58,6 +59,7 @@ export async function ArchivoView(props: {
   q = props.orden === "calidad" ? q.order("quality_score", { ascending: false, nullsFirst: false }) : q.order("created_at", { ascending: false })
   if (props.brandId) q = q.eq("brand_id", props.brandId)
   if (props.origen !== "todo") q = q.eq("source", props.origen)
+  if (props.tipo !== "todo") q = q.like("mime", props.tipo === "fotos" ? "image/%" : "video/%")
   const { data, error, count } = await q
   if (error) throw new Error(`No se pudo cargar el archivo: ${error.message}`)
   const rows = (data ?? []) as unknown as Row[]
@@ -72,7 +74,7 @@ export async function ArchivoView(props: {
     : { data: null }
 
   const link = (patch: Record<string, string>) => {
-    const p = new URLSearchParams({ vista: "archivo", estado: props.estado, orden: props.orden, origen: props.origen, ...patch })
+    const p = new URLSearchParams({ vista: "archivo", estado: props.estado, orden: props.orden, origen: props.origen, tipo: props.tipo, ...patch })
     return `/media?${p}`
   }
   const chip = (href: string, label: string, on: boolean) => (
@@ -108,6 +110,10 @@ export async function ArchivoView(props: {
           {chip(link({ origen: "todo" }), "Todo", props.origen === "todo")}
           {chip(link({ origen: "drive" }), "Base de fotos", props.origen === "drive")}
           {chip(link({ origen: "instagram" }), "Instagram", props.origen === "instagram")}
+          <span className="mx-1 text-muted-foreground">·</span>
+          {chip(link({ tipo: "todo" }), "Fotos y videos", props.tipo === "todo")}
+          {chip(link({ tipo: "fotos" }), "Fotos", props.tipo === "fotos")}
+          {chip(link({ tipo: "videos" }), "Videos", props.tipo === "videos")}
         </div>
         {!props.brandId && (
           <p className="mb-4 text-xs text-muted-foreground">Elegí una marca arriba para traer material de su base de fotos o de su Instagram.</p>

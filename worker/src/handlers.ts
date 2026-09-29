@@ -23,7 +23,7 @@ import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
 import { fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, withTmp, writeTmp } from "./media.ts"
 import { classify, writeCaption } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
-import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive } from "../../shared/cos/base-fotos.ts"
+import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
 import { syncAccount } from "./metrics.ts"
 import { arDay, contextForBrand, syncContext } from "./context.ts"
@@ -838,6 +838,7 @@ async function setBaseEstado(db: SupabaseClient, brandId: string, estado: Record
 const scanDrive: Handler = async (job, { db, queue, log }) => {
   const brandId = idFrom(job, "brand_id")
   const limite = Math.min(200, Math.max(1, Number(job.payload.limite) || 50))
+  const tipo: TipoTanda = TIPOS.includes(job.payload.tipo as TipoTanda) ? (job.payload.tipo as TipoTanda) : "todo"
   const drive = driveFromEnv()
   if (!drive) throw new PermanentError("Drive no está conectado en el servidor")
   const { data: b, error } = await db.from("cos_brands").select("id, slug, base_folder_id").eq("id", brandId).single()
@@ -889,7 +890,7 @@ const scanDrive: Handler = async (job, { db, queue, log }) => {
     .in("status", ["queued", "running"])
   const enCamino = new Set((cola ?? []).map((j) => (j.payload as { file_id?: string }).file_id).filter(Boolean) as string[])
 
-  const t = elegirTanda(archivos, ya, enCamino, limite)
+  const t = elegirTanda(archivos, ya, enCamino, limite, tipo)
   // La tanda nueva arranca después de la última ya programada (de cualquier marca).
   let at = Math.max(Date.now(), ...(cola ?? []).map((j) => new Date(j.run_at as string).getTime()))
   for (const f of t.elegidos) {
@@ -903,7 +904,10 @@ const scanDrive: Handler = async (job, { db, queue, log }) => {
   await setBaseEstado(db, brandId, {
     error: null,
     pedidos: t.elegidos.length,
+    tipo,
     total: t.total,
+    fotos: t.fotos,
+    videos: t.videos,
     ya_traidos: t.yaTraidos,
     en_camino: enCamino.size + t.elegidos.length,
     quedan: t.quedan,

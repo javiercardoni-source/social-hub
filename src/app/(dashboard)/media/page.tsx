@@ -59,7 +59,7 @@ function formatDuration(ms: number | null) {
   return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min` : `${s}s`
 }
 
-export default async function BibliotecaPage({ searchParams }: { searchParams: Promise<{ vista?: string; estado?: string; orden?: string; origen?: string }> }) {
+export default async function BibliotecaPage({ searchParams }: { searchParams: Promise<{ vista?: string; estado?: string; orden?: string; origen?: string; tipo?: string }> }) {
   await requireMember("viewer")
   const db = createAdminClient()
   const sp = await searchParams
@@ -69,6 +69,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
   if (sp.vista === "archivo") {
     return <ArchivoView brandId={brand?.id ?? null} brandName={brand?.name ?? null} estado={sp.estado === "usados" ? "usados" : "pendientes"} orden={sp.orden === "recientes" ? "recientes" : "calidad"}
         origen={sp.origen === "drive" || sp.origen === "instagram" ? sp.origen : "todo"}
+        tipo={sp.tipo === "fotos" || sp.tipo === "videos" ? sp.tipo : "todo"}
       />
   }
 

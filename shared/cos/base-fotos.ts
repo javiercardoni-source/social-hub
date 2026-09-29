@@ -19,13 +19,21 @@ export const BASE_MAX_BYTES = 200 * 1024 * 1024
 
 export const TANDAS = [25, 50, 100, 200] as const
 
+/** Qué traer en la tanda. */
+export const TIPOS = ["todo", "fotos", "videos"] as const
+export type TipoTanda = (typeof TIPOS)[number]
+const esDelTipo = (mime: string, tipo: TipoTanda) =>
+  tipo === "todo" || (tipo === "fotos" ? mime.startsWith("image/") : mime.startsWith("video/"))
+
 export type ArchivoBase = { id: string; name: string; mimeType: string; size?: string; createdTime?: string; path: string }
 
 export type Tanda = {
   elegidos: ArchivoBase[]
   total: number // fotos y videos procesables en la carpeta
+  fotos: number // de ese total, cuántas fotos…
+  videos: number // …y cuántos videos
   yaTraidos: number
-  quedan: number // procesables que siguen sin traer después de esta tanda
+  quedan: number // procesables del tipo pedido que siguen sin traer después de esta tanda
   pesados: number // videos que no se pueden traer por tamaño
   noSoportados: number // otros archivos (PDF, planillas, RAW…)
 }
@@ -40,6 +48,7 @@ export function elegirTanda(
   yaTraidos: Set<string>,
   enCamino: Set<string>,
   limite: number,
+  tipo: TipoTanda = "todo",
 ): Tanda {
   let noSoportados = 0
   let pesados = 0
@@ -58,7 +67,7 @@ export function elegirTanda(
   const traidos = procesables.filter((f) => yaTraidos.has(f.id)).length
   const hashes = new Set<string>()
   const candidatos = procesables
-    .filter((f) => !yaTraidos.has(f.id) && !enCamino.has(f.id))
+    .filter((f) => !yaTraidos.has(f.id) && !enCamino.has(f.id) && esDelTipo(f.mimeType, tipo))
     .sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? ""))
     .filter((f) => {
       if (!f.md5Checksum) return true
@@ -70,6 +79,8 @@ export function elegirTanda(
   return {
     elegidos,
     total: procesables.length,
+    fotos: procesables.filter((f) => f.mimeType.startsWith("image/")).length,
+    videos: procesables.filter((f) => f.mimeType.startsWith("video/")).length,
     yaTraidos: traidos,
     quedan: candidatos.length - elegidos.length,
     pesados,

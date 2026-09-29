@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cambiarCarpetaBase, descartarDelArchivo, importarInstagram, traerDeBase, usarDelArchivo } from "@/lib/cos/actions"
-import { TANDAS } from "../../../../shared/cos/base-fotos"
+import { TANDAS, type TipoTanda } from "../../../../shared/cos/base-fotos"
 import { explicarError } from "@/lib/ui-errors"
 
 export function ArchivoAcciones({ id, listo, usado }: { id: string; listo: boolean; usado: boolean }) {
@@ -74,7 +74,10 @@ export type BaseEstado = {
   buscando?: boolean
   error?: string | null
   pedidos?: number
+  tipo?: TipoTanda
   total?: number
+  fotos?: number
+  videos?: number
   ya_traidos?: number
   en_camino?: number
   quedan?: number
@@ -94,6 +97,7 @@ export function TraerMaterial(props: { brandId: string; brandName: string; folde
   const router = useRouter()
   const [pending, start] = useTransition()
   const [cantidad, setCantidad] = useState<number>(50)
+  const [tipo, setTipo] = useState<TipoTanda>("todo")
   const [editando, setEditando] = useState(false)
   const [link, setLink] = useState("")
   const [msg, setMsg] = useState<string | null>(null)
@@ -161,7 +165,12 @@ export function TraerMaterial(props: { brandId: string; brandName: string; folde
             </option>
           ))}
         </select>
-        <Button size="sm" disabled={pending || e?.buscando} onClick={() => run(() => traerDeBase(props.brandId, cantidad))}>
+        <select value={tipo} onChange={(ev) => setTipo(ev.target.value as TipoTanda)} aria-label="Qué traer" className="h-8 rounded-lg border bg-background px-2 text-sm">
+          <option value="todo">Fotos y videos</option>
+          <option value="fotos">Solo fotos</option>
+          <option value="videos">Solo videos</option>
+        </select>
+        <Button size="sm" disabled={pending || e?.buscando} onClick={() => run(() => traerDeBase(props.brandId, cantidad, tipo))}>
           {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Traer desde base de fotos
         </Button>
         <ImportarInstagram brandId={props.brandId} />
@@ -178,14 +187,17 @@ export function TraerMaterial(props: { brandId: string; brandName: string; folde
         <p className="text-xs text-muted-foreground">
           {e.pedidos ? (
             <>
-              <b className="text-foreground">Tanda de {n(e.pedidos)} en camino</b>
+              <b className="text-foreground">
+                Tanda de {n(e.pedidos)} {e.tipo === "fotos" ? "fotos" : e.tipo === "videos" ? "videos" : "archivos"} en camino
+              </b>
               {e.termina && <> · la IA termina de analizarla cerca de las {hora(e.termina)}</>}
             </>
           ) : (
-            <b className="text-foreground">No hay nada nuevo para traer</b>
+            <b className="text-foreground">No hay {e.tipo === "fotos" ? "fotos nuevas" : e.tipo === "videos" ? "videos nuevos" : "nada nuevo"} para traer</b>
           )}
           {" · "}
-          {n(e.ya_traidos)} de {n(e.total)} ya traídos · quedan {n(e.quedan)}
+          en la carpeta hay {n(e.fotos)} fotos y {n(e.videos)} videos · {n(e.ya_traidos)} ya traídos · quedan {n(e.quedan)}
+          {e.tipo === "fotos" ? " fotos" : e.tipo === "videos" ? " videos" : ""}
           {!!e.pesados && <> · {n(e.pesados)} videos de más de 200 MB no se pueden traer</>}
           {!!e.no_soportados && <> · {n(e.no_soportados)} archivos que no son fotos ni videos (ignorados)</>}
         </p>
