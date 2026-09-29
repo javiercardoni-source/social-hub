@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError } from "./queue.ts"
 import { storageFor, supabaseStorage } from "./storage.ts"
 import { compositePhoto, finishVideo, fitForInstagramFeed, fitForStory, photoToReel, probe, toJpeg, withTmp, writeTmp } from "./media.ts"
-import { layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
+import { KITS, layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
 import { reviewPiece, type PieceReview } from "./ai.ts"
 
 // Subir este número vuelve a generar todas las piezas (si cambia el diseño de las plantillas).
@@ -48,7 +48,8 @@ export function renderKey(p: RenderPost): string | null {
   // Un video sin plantilla ni música se publica tal cual: no hay nada que armar.
   if (isVideo && p.template === "none" && !p.music_key) return null
   const h = createHash("sha256")
-    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom", p.kit?.version ?? ""].join("\x1f"))
+    // El diseño de la plantilla de la marca (KITS) entra en la clave: si cambia, se rearma solo.
+    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom", p.kit?.version ?? "", JSON.stringify(KITS[p.brand_slug] ?? null)].join("\x1f"))
     .digest("hex")
     .slice(0, 16)
   return `renders/${p.id}/${h}.${rendersVideo(p) ? "mp4" : "jpg"}`
