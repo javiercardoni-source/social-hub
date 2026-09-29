@@ -1,10 +1,10 @@
 import Link from "next/link"
-import Image from "next/image"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { signedUrls } from "@/lib/cos/storage"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { cn } from "@/lib/utils"
-import { ArchivoAcciones, TraerMaterial, type BaseEstado } from "./archivo-client"
+import { TraerMaterial, type BaseEstado } from "./archivo-client"
+import { ArchivoGrid } from "./archivo-grid"
 
 export function BibliotecaTabs({ activa }: { activa: "cocina" | "archivo" }) {
   const tab = (href: string, label: string, on: boolean) => (
@@ -42,7 +42,7 @@ export type Origen = "todo" | "drive" | "instagram"
 export async function ArchivoView(props: {
   brandId: string | null
   brandName: string | null
-  estado: "pendientes" | "usados"
+  estado: "pendientes" | "usados" | "descartados"
   orden: "calidad" | "recientes"
   origen: Origen
   tipo: "todo" | "fotos" | "videos"
@@ -54,8 +54,8 @@ export async function ArchivoView(props: {
       "id, description, description_by_ai, media_type, status, quality_score, thumb_key, source, origin_path, review_status, ai_json, created_at, cos_brands(name, color), cos_media(metrics, posted_at)",
       { count: "exact" },
     )
-    .eq("review_status", props.estado === "usados" ? "approved" : "pending")
-    .limit(60)
+    .eq("review_status", props.estado === "usados" ? "approved" : props.estado === "descartados" ? "discarded" : "pending")
+    .limit(100)
   q = props.orden === "calidad" ? q.order("quality_score", { ascending: false, nullsFirst: false }) : q.order("created_at", { ascending: false })
   if (props.brandId) q = q.eq("brand_id", props.brandId)
   if (props.origen !== "todo") q = q.eq("source", props.origen)
@@ -87,7 +87,7 @@ export async function ArchivoView(props: {
     <>
       <PageHeader
         title="Biblioteca"
-        description={`${props.brandName ? `${props.brandName} · ` : ""}Archivo: ${count ?? 0} ${props.estado === "usados" ? "elegidos" : "para revisar"}${analizando ? ` · ${analizando} analizándose` : ""}`}
+        description={`${props.brandName ? `${props.brandName} · ` : ""}Archivo: ${count ?? 0} ${props.estado === "usados" ? "elegidos" : props.estado === "descartados" ? "descartados" : "para revisar"}${analizando ? ` · ${analizando} analizándose` : ""}`}
       />
       <div className="p-6">
         <BibliotecaTabs activa="archivo" />
@@ -103,6 +103,7 @@ export async function ArchivoView(props: {
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {chip(link({ estado: "pendientes" }), "Para revisar", props.estado === "pendientes")}
           {chip(link({ estado: "usados" }), "Elegidos", props.estado === "usados")}
+          {chip(link({ estado: "descartados" }), "Descartados", props.estado === "descartados")}
           <span className="mx-1 text-muted-foreground">·</span>
           {chip(link({ orden: "calidad" }), "Mejor calidad primero", props.orden === "calidad")}
           {chip(link({ orden: "recientes" }), "Más nuevos", props.orden === "recientes")}
@@ -120,55 +121,26 @@ export async function ArchivoView(props: {
         )}
         {rows.length === 0 ? (
           <div className="rounded-xl border-2 border-dashed p-10 text-center text-sm text-muted-foreground">
-            {props.estado === "usados" ? "Todavía no elegiste nada del archivo." : "No hay material para revisar. Traé una tanda de la base de fotos o lo publicado en Instagram."}
+            {props.estado === "usados" ? "Todavía no elegiste nada del archivo." : props.estado === "descartados" ? "No descartaste nada." : "No hay material para revisar. Traé una tanda de la base de fotos o lo publicado en Instagram."}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {rows.map((r) => {
-              const t = r.thumb_key ? thumbs[r.thumb_key] : null
-              const analizado = ["READY", "IN_USE"].includes(r.status) && r.quality_score != null
-              const rend = r.cos_media?.metrics
-              return (
-                <div key={r.id} className="flex flex-col overflow-hidden rounded-xl border bg-card">
-                  <div className="relative aspect-square bg-muted">
-                    {t && <Image src={t} alt="" fill className="object-cover" sizes="220px" />}
-                    <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                      {r.source === "instagram" ? "Ya publicado en IG" : r.source === "drive" ? "Base de fotos" : "Carpeta"}
-                    </span>
-                    {r.media_type === "video" && <span className="absolute right-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">Video</span>}
-                  </div>
-                  <div className="flex flex-1 flex-col gap-1.5 p-2.5 text-xs">
-                    {analizado ? (
-                      <>
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold">Calidad {r.quality_score}</span>
-                          {r.cos_brands && (
-                            <span className="flex items-center gap-1 text-muted-foreground">
-                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: r.cos_brands.color }} />
-                              {r.cos_brands.name}
-                            </span>
-                          )}
-                        </div>
-                        <p className="line-clamp-3 text-muted-foreground">{r.description}</p>
-                        {r.ai_json?.category && <p className="text-[10px] text-muted-foreground/70">{r.ai_json.category}</p>}
-                        {rend && (
-                          <p className="text-[10px] font-medium text-emerald-700">
-                            Cuando se publicó: {(rend.reach || rend.views || 0).toLocaleString("es-AR")} {rend.reach ? "alcance" : "vistas"} · {rend.total_interactions ?? 0} interacc.
-                          </p>
-                        )}
-                        {!!r.ai_json?.risk_flags?.length && <p className="text-[10px] text-amber-700">⚠ {r.ai_json.risk_flags.join(", ").replace(/_/g, " ")}</p>}
-                      </>
-                    ) : (
-                      <p className="text-muted-foreground">La IA lo está analizando…</p>
-                    )}
-                    <div className="mt-auto pt-1">
-                      <ArchivoAcciones id={r.id} listo={analizado} usado={r.review_status === "approved"} />
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          <ArchivoGrid
+            estado={props.estado}
+            items={rows.map((r) => ({
+              id: r.id,
+              description: r.description,
+              media_type: r.media_type,
+              status: r.status,
+              quality_score: r.quality_score,
+              thumb: r.thumb_key ? (thumbs[r.thumb_key] ?? null) : null,
+              source: r.source,
+              review_status: r.review_status,
+              category: r.ai_json?.category ?? null,
+              risk_flags: r.ai_json?.risk_flags ?? [],
+              brand: r.cos_brands,
+              rend: r.cos_media?.metrics ?? null,
+            }))}
+          />
         )}
       </div>
     </>

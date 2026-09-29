@@ -333,6 +333,58 @@ export async function descartarDelArchivo(assetId: string) {
   revalidatePath("/media")
 }
 
+const UUID = /^[0-9a-f-]{36}$/
+
+/** Descarta varias del Archivo de una vez (selección con tilde). No toca Drive ni Instagram. */
+export async function descartarVarios(assetIds: string[]) {
+  await requireMember("editor")
+  const ids = [...new Set(assetIds)].filter((id) => UUID.test(id))
+  if (!ids.length) throw aviso("No hay nada seleccionado")
+  if (ids.length > 500) throw aviso("Son demasiadas de una vez: descartá hasta 500")
+  const db = createAdminClient()
+  // Solo material de archivo sin usar: lo ya elegido (con borradores) no se toca desde acá.
+  const { error, count } = await db
+    .from("cos_assets")
+    .update({ review_status: "discarded", status: "ARCHIVED" }, { count: "exact" })
+    .in("id", ids)
+    .eq("review_status", "pending")
+  if (error) throw aviso(`No se pudieron descartar: ${error.message}`)
+  revalidatePath("/media")
+  return { descartados: count ?? 0 }
+}
+
+/** Devuelve al Archivo lo descartado por error. Si no se había llegado a analizar, se analiza. */
+export async function recuperarVarios(assetIds: string[]) {
+  await requireMember("editor")
+  const ids = [...new Set(assetIds)].filter((id) => UUID.test(id))
+  if (!ids.length) throw aviso("No hay nada seleccionado")
+  if (ids.length > 500) throw aviso("Son demasiadas de una vez: recuperá hasta 500")
+  const db = createAdminClient()
+  const { data, error } = await db.from("cos_assets").select("id, current_version_id, quality_score").in("id", ids).eq("review_status", "discarded")
+  if (error) throw aviso(`No se pudieron recuperar: ${error.message}`)
+  for (const a of data ?? []) {
+    const procesado = !!a.current_version_id
+    const { error: ue } = await db
+      .from("cos_assets")
+      .update({ review_status: "pending", status: procesado ? "READY" : "NEW" })
+      .eq("id", a.id)
+      .eq("review_status", "discarded")
+    if (ue) throw aviso(`No se pudo recuperar: ${ue.message}`)
+    // Lo que se descartó antes de terminar el análisis se retoma donde quedó.
+    const tipo = !procesado ? "asset:process" : a.quality_score == null ? "asset:classify" : null
+    if (tipo) {
+      await db.rpc("cos_enqueue_job", {
+        p_type: tipo,
+        p_payload: { asset_id: a.id },
+        p_run_at: new Date().toISOString(),
+        p_dedupe_key: `${tipo === "asset:process" ? "process" : "classify"}:${a.id}`,
+      })
+    }
+  }
+  revalidatePath("/media")
+  return { recuperados: data?.length ?? 0 }
+}
+
 /** Trae al Archivo lo publicado en Instagram de una marca (de a poco: uno cada 20 s). */
 export async function importarInstagram(brandId: string) {
   await requireMember("approver")
