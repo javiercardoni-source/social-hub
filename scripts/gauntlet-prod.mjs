@@ -18,6 +18,7 @@ const PAGES = {
   "/media": /Biblioteca/,
   "/media/subir": /Subir contenido/,
   "/aprobaciones": /Aprobaciones/,
+  "/feed": /Feed/,
   "/calendar": /Calendario/,
   "/accounts": /Cuentas conectadas/,
   "/marca": /Marca/,
