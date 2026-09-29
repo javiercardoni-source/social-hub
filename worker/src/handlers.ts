@@ -841,46 +841,74 @@ const scanDrive: Handler = async (job, { db, queue, log }) => {
   const tipo: TipoTanda = TIPOS.includes(job.payload.tipo as TipoTanda) ? (job.payload.tipo as TipoTanda) : "todo"
   const drive = driveFromEnv()
   if (!drive) throw new PermanentError("Drive no está conectado en el servidor")
-  const { data: b, error } = await db.from("cos_brands").select("id, slug, base_folder_id").eq("id", brandId).single()
+  const { data: b, error } = await db.from("cos_brands").select("id, slug, base_folder_id, base_folders").eq("id", brandId).single()
   if (error || !b) throw new PermanentError(`marca ${brandId}: ${error?.message ?? "no existe"}`)
 
-  let folderId = b.base_folder_id as string | null
-  let folderName: string
+  // Carpetas de la marca: la lista (varias) o, si está vacía, la única de antes o la de Content OS.
+  const lista = (Array.isArray(b.base_folders) ? b.base_folders : []) as { id: string; name?: string | null }[]
+  const carpetas: { id: string; name: string }[] = []
   try {
-    if (!folderId) {
-      folderId = await drive.path(["00_BASE", b.slug])
-      folderName = `Content OS/00_BASE/${b.slug}`
-    } else {
-      const m = await drive.meta(folderId)
+    if (lista.length) {
+      for (const c of lista) {
+        let m: Awaited<ReturnType<typeof drive.meta>>
+        try {
+          m = await drive.meta(c.id)
+        } catch (e) {
+          throw new Error(`«${c.name ?? c.id}»: ${e instanceof Error ? e.message : String(e)}`)
+        }
+        if (m.mimeType !== FOLDER_MIME) throw new PermanentError(`«${m.name}» no es una carpeta`)
+        carpetas.push({ id: c.id, name: m.name })
+      }
+      // Se guardan los nombres reales (desde la web solo se conoce el link).
+      await db.from("cos_brands").update({ base_folders: carpetas }).eq("id", brandId)
+    } else if (b.base_folder_id) {
+      const m = await drive.meta(b.base_folder_id)
       if (m.mimeType !== FOLDER_MIME) throw new PermanentError("el link no es de una carpeta")
-      folderName = m.name
+      carpetas.push({ id: b.base_folder_id, name: m.name })
+    } else {
+      carpetas.push({ id: await drive.path(["00_BASE", b.slug]), name: `Content OS/00_BASE/${b.slug}` })
     }
-    await db.from("cos_brands").update({ base_folder_id: folderId, base_folder_name: folderName }).eq("id", brandId)
+    if (!lista.length) await db.from("cos_brands").update({ base_folder_id: carpetas[0].id, base_folder_name: carpetas[0].name }).eq("id", brandId)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     const permiso = /403|404|insufficient|scope/i.test(msg)
     await setBaseEstado(db, brandId, {
       error: permiso
-        ? "No puedo ver esa carpeta. Compartila con javiercardonibetti@gmail.com (lector alcanza) y, si ya lo hiciste, falta reconectar Drive con el permiso nuevo."
+        ? `No puedo ver una de las carpetas (${msg.slice(0, 80)}). Compartila con javiercardonibetti@gmail.com (lector alcanza).`
         : `No pude abrir la carpeta: ${msg.slice(0, 200)}`,
     })
     log("base de fotos: no se pudo abrir la carpeta", { brand: brandId, error: msg })
     return
   }
 
-  let archivos: Awaited<ReturnType<typeof drive.listTree>>
+  // Todas las carpetas juntas; si una está dentro de otra, cada archivo cuenta una vez.
+  const porId = new Map<string, Awaited<ReturnType<typeof drive.listTree>>[number]>()
   try {
-    archivos = await drive.listTree(folderId)
+    for (const c of carpetas) {
+      for (const f of await drive.listTree(c.id)) {
+        if (!porId.has(f.id)) porId.set(f.id, { ...f, path: f.path ? `${c.name}/${f.path}` : c.name })
+      }
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await setBaseEstado(db, brandId, { error: `No pude recorrer la carpeta (${msg.slice(0, 160)}). Se reintenta sola en unos minutos.` })
     throw e
   }
+  const archivos = [...porId.values()]
   // Ya traídos (paginado: pueden ser miles) y en camino (trabajos en la cola).
   const ya = new Set<string>()
+  const md5Traidos = new Set<string>()
   for (let from = 0; ; from += 1000) {
-    const { data } = await db.from("cos_assets").select("source_external_id").eq("brand_id", brandId).eq("source", "drive").range(from, from + 999)
-    for (const r of data ?? []) if (r.source_external_id) ya.add(r.source_external_id)
+    const { data } = await db
+      .from("cos_assets")
+      .select("source, source_external_id, origin_md5")
+      .eq("brand_id", brandId)
+      .or("source.eq.drive,origin_md5.not.is.null")
+      .range(from, from + 999)
+    for (const r of data ?? []) {
+      if (r.source === "drive" && r.source_external_id) ya.add(r.source_external_id)
+      if (r.origin_md5) md5Traidos.add(r.origin_md5)
+    }
     if (!data || data.length < 1000) break
   }
   const { data: cola } = await db
@@ -890,7 +918,7 @@ const scanDrive: Handler = async (job, { db, queue, log }) => {
     .in("status", ["queued", "running"])
   const enCamino = new Set((cola ?? []).map((j) => (j.payload as { file_id?: string }).file_id).filter(Boolean) as string[])
 
-  const t = elegirTanda(archivos, ya, enCamino, limite, tipo)
+  const t = elegirTanda(archivos, ya, enCamino, limite, tipo, md5Traidos)
   // La tanda nueva arranca después de la última ya programada (de cualquier marca).
   let at = Math.max(Date.now(), ...(cola ?? []).map((j) => new Date(j.run_at as string).getTime()))
   for (const f of t.elegidos) {
@@ -913,6 +941,8 @@ const scanDrive: Handler = async (job, { db, queue, log }) => {
     quedan: t.quedan,
     pesados: t.pesados,
     no_soportados: t.noSoportados,
+    repetidos: t.repetidos,
+    carpetas: carpetas.length,
     termina: new Date(at).toISOString(),
   })
   log("base de fotos: tanda encolada", { brand: brandId, pedidos: t.elegidos.length, quedan: t.quedan })
@@ -932,6 +962,10 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
   const ext = BASE_MIMES[f.mimeType]
   if (!ext) return log("base de fotos: formato no soportado (se saltea)", { file: fileId, mime: f.mimeType })
   if (Number(f.size ?? 0) > BASE_MAX_BYTES) return log("base de fotos: demasiado pesado (se saltea)", { file: fileId, size: f.size })
+  if (f.md5Checksum) {
+    const { data: copia } = await db.from("cos_assets").select("id").eq("brand_id", brandId).eq("origin_md5", f.md5Checksum).limit(1)
+    if (copia?.length) return log("base de fotos: copia idéntica de algo ya traído (se saltea)", { file: fileId })
+  }
 
   const data = await drive.download(fileId)
   const { data: brand } = await db.from("cos_brands").select("slug").eq("id", brandId).single()
@@ -955,6 +989,7 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
       status: "NEW",
       review_status: "pending",
       origin_path: origen.slice(0, 500),
+      origin_md5: f.md5Checksum ?? null,
     })
     .select("id")
     .single()

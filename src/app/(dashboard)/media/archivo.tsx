@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { signedUrls } from "@/lib/cos/storage"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { cn } from "@/lib/utils"
-import { TraerMaterial, type BaseEstado } from "./archivo-client"
+import { TraerMaterial, type BaseEstado, type CarpetaBase } from "./archivo-client"
 import { ArchivoGrid } from "./archivo-grid"
 
 export function BibliotecaTabs({ activa }: { activa: "cocina" | "archivo" }) {
@@ -70,7 +70,7 @@ export async function ArchivoView(props: {
   const { count: analizando } = await pq
 
   const { data: base } = props.brandId
-    ? await db.from("cos_brands").select("base_folder_id, base_folder_name, base_estado").eq("id", props.brandId).single()
+    ? await db.from("cos_brands").select("base_folder_id, base_folder_name, base_folders, base_estado").eq("id", props.brandId).single()
     : { data: null }
 
   const link = (patch: Record<string, string>) => {
@@ -97,6 +97,7 @@ export async function ArchivoView(props: {
             brandName={props.brandName}
             folderId={base?.base_folder_id ?? null}
             folderName={base?.base_folder_name ?? null}
+            carpetas={(Array.isArray(base?.base_folders) ? base.base_folders : []) as CarpetaBase[]}
             estado={(base?.base_estado as BaseEstado | null) ?? null}
           />
         )}

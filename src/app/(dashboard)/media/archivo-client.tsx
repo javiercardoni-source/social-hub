@@ -4,7 +4,7 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cambiarCarpetaBase, descartarDelArchivo, importarInstagram, traerDeBase, usarDelArchivo } from "@/lib/cos/actions"
+import { agregarCarpetasBase, cambiarCarpetaBase, descartarDelArchivo, importarInstagram, quitarCarpetaBase, traerDeBase, usarDelArchivo } from "@/lib/cos/actions"
 import { TANDAS, type TipoTanda } from "../../../../shared/cos/base-fotos"
 import { explicarError } from "@/lib/ui-errors"
 
@@ -83,6 +83,7 @@ export type BaseEstado = {
   quedan?: number
   pesados?: number
   no_soportados?: number
+  repetidos?: number
   termina?: string
 }
 
@@ -93,13 +94,22 @@ const n = (x?: number) => (x ?? 0).toLocaleString("es-AR")
  * Tarjeta «Traer material»: base de fotos (Drive, de a tandas) e Instagram, lado a lado.
  * Se trae de a tandas para que la IA analice de a poco y el histórico entre cuando Javier decide.
  */
-export function TraerMaterial(props: { brandId: string; brandName: string; folderId: string | null; folderName: string | null; estado: BaseEstado | null }) {
+export type CarpetaBase = { id: string; name: string | null }
+
+export function TraerMaterial(props: {
+  brandId: string
+  brandName: string
+  folderId: string | null
+  folderName: string | null
+  carpetas: CarpetaBase[]
+  estado: BaseEstado | null
+}) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [cantidad, setCantidad] = useState<number>(50)
   const [tipo, setTipo] = useState<TipoTanda>("todo")
   const [editando, setEditando] = useState(false)
-  const [link, setLink] = useState("")
+  const [links, setLinks] = useState("")
   const [msg, setMsg] = useState<string | null>(null)
   const e = props.estado
   const run = (fn: () => Promise<unknown>, ok?: string) =>
@@ -113,42 +123,80 @@ export function TraerMaterial(props: { brandId: string; brandName: string; folde
         setMsg(explicarError(err))
       }
     })
+  const abrir = (id: string) => `https://drive.google.com/drive/folders/${id}`
 
   return (
     <div className="mb-5 space-y-3 rounded-xl border bg-card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-bold">Traer material · {props.brandName}</p>
+      <div>
+        <p className="text-sm font-bold">Traer material · {props.brandName}</p>
+        {props.carpetas.length ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">Base de fotos ({props.carpetas.length} carpetas):</span>
+            {props.carpetas.map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1 rounded-full border bg-background py-0.5 pl-2.5 pr-1">
+                <a className="font-medium hover:underline" href={abrir(c.id)} target="_blank" rel="noreferrer">
+                  {c.name ?? "carpeta nueva"}
+                </a>
+                <button
+                  type="button"
+                  aria-label={`Quitar ${c.name ?? "carpeta"}`}
+                  disabled={pending}
+                  className="rounded-full px-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                  onClick={() => confirm(`¿Sacar «${c.name ?? "esta carpeta"}» de la base? Lo ya traído queda en el Archivo.`) && run(() => quitarCarpetaBase(props.brandId, c.id))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button type="button" className="underline hover:text-foreground" onClick={() => setEditando((v) => !v)}>
+              + agregar
+            </button>
+          </div>
+        ) : (
           <p className="text-xs text-muted-foreground">
             Base de fotos:{" "}
             {props.folderId ? (
-              <a className="font-medium text-primary hover:underline" href={`https://drive.google.com/drive/folders/${props.folderId}`} target="_blank" rel="noreferrer">
+              <a className="font-medium text-primary hover:underline" href={abrir(props.folderId)} target="_blank" rel="noreferrer">
                 {props.folderName ?? "carpeta de Drive"}
               </a>
             ) : (
               <span className="font-medium">Content OS/00_BASE (se crea en la primera tanda)</span>
             )}{" "}
-            · <button type="button" className="underline hover:text-foreground" onClick={() => setEditando((v) => !v)}>cambiar carpeta</button>
+            · <button type="button" className="underline hover:text-foreground" onClick={() => setEditando((v) => !v)}>usar carpetas mías de Drive</button>
           </p>
-        </div>
+        )}
       </div>
 
       {editando && (
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={link}
-            onChange={(ev) => setLink(ev.target.value)}
-            placeholder="Link de la carpeta de Drive (compartida con javiercardonibetti@gmail.com)"
-            className="min-w-[260px] flex-1 rounded-lg border bg-background px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+        <div className="space-y-2">
+          <textarea
+            value={links}
+            onChange={(ev) => setLinks(ev.target.value)}
+            rows={3}
+            placeholder={"Pegá uno o varios links de carpetas de Drive (uno por línea).\nTienen que estar compartidas con javiercardonibetti@gmail.com (lector alcanza)."}
+            className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
           />
-          <Button size="sm" disabled={pending || !link.trim()} onClick={() => run(async () => { await cambiarCarpetaBase(props.brandId, link); setEditando(false); setLink("") }, "Carpeta guardada")}>
-            Guardar
-          </Button>
-          {props.folderId && (
-            <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => cambiarCarpetaBase(props.brandId, ""), "Vuelve a la carpeta por defecto")}>
-              Usar la de Content OS
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={pending || !links.trim()}
+              onClick={() =>
+                run(async () => {
+                  const r = await agregarCarpetasBase(props.brandId, links)
+                  setLinks("")
+                  setEditando(false)
+                  setMsg(r.agregadas ? `${r.agregadas} carpetas agregadas` : "Esas carpetas ya estaban")
+                })
+              }
+            >
+              Agregar carpetas
             </Button>
-          )}
+            {(props.carpetas.length > 0 || props.folderId) && (
+              <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => cambiarCarpetaBase(props.brandId, ""), "Vuelve a la carpeta de Content OS")}>
+                Volver a la de Content OS
+              </Button>
+            )}
+          </div>
         </div>
       )}
 
@@ -199,6 +247,7 @@ export function TraerMaterial(props: { brandId: string; brandName: string; folde
           en la carpeta hay {n(e.fotos)} fotos y {n(e.videos)} videos · {n(e.ya_traidos)} ya traídos · quedan {n(e.quedan)}
           {e.tipo === "fotos" ? " fotos" : e.tipo === "videos" ? " videos" : ""}
           {!!e.pesados && <> · {n(e.pesados)} videos de más de 200 MB no se pueden traer</>}
+          {!!e.repetidos && <> · {n(e.repetidos)} copias repetidas filtradas</>}
           {!!e.no_soportados && <> · {n(e.no_soportados)} archivos que no son fotos ni videos (ignorados)</>}
         </p>
       ) : (

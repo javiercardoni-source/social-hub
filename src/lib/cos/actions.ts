@@ -432,13 +432,45 @@ export async function traerDeBase(brandId: string, cantidad: number, tipo: TipoT
   revalidatePath("/media")
 }
 
+/** Suma carpetas de Drive a la base de fotos de la marca. Acepta varios links (uno por línea). */
+export async function agregarCarpetasBase(brandId: string, links: string) {
+  await requireMember("approver")
+  const partes = links.split(/[\s,]+/).filter(Boolean)
+  const ids = partes.map(carpetaDeLink)
+  const malos = partes.filter((_, i) => !ids[i])
+  if (!partes.length) throw aviso("Pegá al menos un link de carpeta")
+  if (malos.length) throw aviso(`Esto no parece un link de carpeta de Drive: ${malos[0].slice(0, 80)}`)
+  const db = createAdminClient()
+  const { data: b, error } = await db.from("cos_brands").select("base_folders").eq("id", brandId).single()
+  if (error || !b) throw aviso("Marca no encontrada")
+  const actuales = (Array.isArray(b.base_folders) ? b.base_folders : []) as { id: string; name?: string | null }[]
+  const nuevas = [...new Set(ids as string[])].filter((id) => !actuales.some((c) => c.id === id)).map((id) => ({ id, name: null }))
+  if (actuales.length + nuevas.length > 30) throw aviso("Hasta 30 carpetas por marca")
+  const { error: ue } = await db.from("cos_brands").update({ base_folders: [...actuales, ...nuevas], base_estado: null }).eq("id", brandId)
+  if (ue) throw aviso(`No se pudieron guardar las carpetas: ${ue.message}`)
+  revalidatePath("/media")
+  return { agregadas: nuevas.length }
+}
+
+/** Saca una carpeta de la base de fotos (lo ya traído de ahí queda en el Archivo). */
+export async function quitarCarpetaBase(brandId: string, folderId: string) {
+  await requireMember("approver")
+  const db = createAdminClient()
+  const { data: b, error } = await db.from("cos_brands").select("base_folders").eq("id", brandId).single()
+  if (error || !b) throw aviso("Marca no encontrada")
+  const actuales = (Array.isArray(b.base_folders) ? b.base_folders : []) as { id: string }[]
+  const { error: ue } = await db.from("cos_brands").update({ base_folders: actuales.filter((c) => c.id !== folderId), base_estado: null }).eq("id", brandId)
+  if (ue) throw aviso(`No se pudo quitar la carpeta: ${ue.message}`)
+  revalidatePath("/media")
+}
+
 /** Cambia la carpeta de Drive que es la base de fotos de la marca (acepta el link de la carpeta). */
 export async function cambiarCarpetaBase(brandId: string, link: string) {
   await requireMember("approver")
   const id = link.trim() ? carpetaDeLink(link) : null
   if (link.trim() && !id) throw aviso("Ese link no parece de una carpeta de Drive. Abrí la carpeta en Drive y copiá el link de la barra del navegador.")
   const db = createAdminClient()
-  const { error } = await db.from("cos_brands").update({ base_folder_id: id, base_folder_name: null, base_estado: null }).eq("id", brandId)
+  const { error } = await db.from("cos_brands").update({ base_folder_id: id, base_folder_name: null, base_folders: [], base_estado: null }).eq("id", brandId)
   if (error) throw aviso(`No se pudo guardar la carpeta: ${error.message}`)
   revalidatePath("/media")
 }

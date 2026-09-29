@@ -36,12 +36,14 @@ export type Tanda = {
   quedan: number // procesables del tipo pedido que siguen sin traer después de esta tanda
   pesados: number // videos que no se pueden traer por tamaño
   noSoportados: number // otros archivos (PDF, planillas, RAW…)
+  repetidos: number // copias idénticas (mismo contenido) de algo ya traído o de otro archivo de la carpeta
 }
 
 /**
  * Elige los próximos `limite` archivos a traer: los más nuevos primero, sin repetir lo ya
- * traído ni lo que ya está en camino (en la cola). Los duplicados exactos (mismo contenido
- * en dos carpetas) entran una sola vez.
+ * traído ni lo que ya está en camino (en la cola). Las copias exactas (mismo contenido, en
+ * otra carpeta o con otro nombre) entran una sola vez, aunque la original haya venido en
+ * otra tanda (`md5Traidos`).
  */
 export function elegirTanda(
   archivos: (ArchivoBase & { md5Checksum?: string })[],
@@ -49,6 +51,7 @@ export function elegirTanda(
   enCamino: Set<string>,
   limite: number,
   tipo: TipoTanda = "todo",
+  md5Traidos: Set<string> = new Set(),
 ): Tanda {
   let noSoportados = 0
   let pesados = 0
@@ -65,16 +68,24 @@ export function elegirTanda(
     procesables.push(f)
   }
   const traidos = procesables.filter((f) => yaTraidos.has(f.id)).length
-  const hashes = new Set<string>()
+  // Huellas ya tomadas: lo traído antes y lo que está en camino (su huella viene en los archivos).
+  const hashes = new Set(md5Traidos)
+  for (const f of procesables) if (f.md5Checksum && (yaTraidos.has(f.id) || enCamino.has(f.id))) hashes.add(f.md5Checksum)
+  let repetidos = 0
   const candidatos = procesables
-    .filter((f) => !yaTraidos.has(f.id) && !enCamino.has(f.id) && esDelTipo(f.mimeType, tipo))
-    .sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? ""))
+    .filter((f) => !yaTraidos.has(f.id) && !enCamino.has(f.id))
+    // Primero los más nuevos; a igual fecha, el nombre sin "copia"/"(1)" gana.
+    .sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? "") || a.name.length - b.name.length)
     .filter((f) => {
       if (!f.md5Checksum) return true
-      if (hashes.has(f.md5Checksum)) return false
+      if (hashes.has(f.md5Checksum)) {
+        repetidos++
+        return false
+      }
       hashes.add(f.md5Checksum)
       return true
     })
+    .filter((f) => esDelTipo(f.mimeType, tipo))
   const elegidos = candidatos.slice(0, Math.max(0, limite))
   return {
     elegidos,
@@ -85,6 +96,7 @@ export function elegirTanda(
     quedan: candidatos.length - elegidos.length,
     pesados,
     noSoportados,
+    repetidos,
   }
 }
 

@@ -42,6 +42,32 @@ describe("elegirTanda", () => {
     expect(t.elegidos.map((x) => x.id)).toEqual(["3", "2"])
   })
 
+  it("una copia no entra aunque la original haya venido en otra tanda", () => {
+    const archivos = [f("1", { md5Checksum: "aaa" }), f("2", { md5Checksum: "aaa" }), f("3", { md5Checksum: "bbb" })]
+    // La 1 ya se trajo antes: la 2 es su copia.
+    const t = elegirTanda(archivos, new Set(["1"]), new Set(), 10, "todo", new Set(["aaa"]))
+    expect(t.elegidos.map((x) => x.id)).toEqual(["3"])
+    expect(t.repetidos).toBe(1)
+    expect(t.quedan).toBe(0)
+  })
+
+  it("una copia de algo que está en camino tampoco entra", () => {
+    const t = elegirTanda([f("1", { md5Checksum: "aaa" }), f("2", { md5Checksum: "aaa" })], new Set(), new Set(["1"]), 10)
+    expect(t.elegidos).toEqual([])
+    expect(t.repetidos).toBe(1)
+  })
+
+  it("entre dos iguales con la misma fecha, gana el nombre sin 'copia'", () => {
+    const mismo = "2025-03-16T00:00:00Z"
+    const t = elegirTanda(
+      [{ ...f("1", { md5Checksum: "aaa", createdTime: mismo }), name: "15C_6442 - copia.jpg" }, { ...f("2", { md5Checksum: "aaa", createdTime: mismo }), name: "15C_6442.jpg" }],
+      new Set(),
+      new Set(),
+      10,
+    )
+    expect(t.elegidos.map((x) => x.name)).toEqual(["15C_6442.jpg"])
+  })
+
   it("puede traer solo fotos o solo videos", () => {
     const archivos = [f("1"), f("2", { mimeType: "video/mp4" }), f("3", { mimeType: "video/quicktime" }), f("4", { mimeType: "image/png" })]
     const soloVideos = elegirTanda(archivos, new Set(), new Set(), 10, "videos")
