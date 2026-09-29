@@ -8,7 +8,7 @@ import { aprobarPost, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/a
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
-import { AlertTriangle, CheckCircle, Heart, Loader2, MessageCircle, Send, Bookmark, ThumbsUp, Share2, XCircle, CheckCheck, Sparkles } from "lucide-react"
+import { AlertTriangle, CheckCircle, Heart, Loader2, MessageCircle, Send, Bookmark, ThumbsUp, Share2, XCircle, CheckCheck, Sparkles, Volume2, VolumeX } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export type PostItem = {
@@ -78,13 +78,57 @@ function frameFor(p: PostItem, w: number | null, h: number | null): { ratio: num
   return { ratio: r, fill: false }
 }
 
+/**
+ * Video de la vista previa con botón de sonido bien visible. Arranca silenciado porque el
+ * navegador no deja reproducir con audio solo; un toque lo activa (y vuelve a empezar).
+ */
+function VideoConSonido({ src, className }: { src: string; className?: string }) {
+  const [muted, setMuted] = useState(true)
+  return (
+    <>
+      <video
+        src={src}
+        className={className}
+        muted={muted}
+        playsInline
+        autoPlay
+        loop
+        ref={(v) => {
+          if (v) v.muted = muted
+        }}
+      />
+      <button
+        type="button"
+        onClick={(e) => {
+          const v = e.currentTarget.previousElementSibling as HTMLVideoElement | null
+          const next = !muted
+          setMuted(next)
+          if (v) {
+            v.muted = next
+            if (!next) {
+              v.currentTime = 0
+              void v.play()
+            }
+          }
+        }}
+        aria-label={muted ? "Activar sonido" : "Silenciar"}
+        className="absolute bottom-[18%] right-3 z-40 flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur hover:bg-black/85"
+      >
+        {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+        {muted ? "Activar sonido" : "Con sonido"}
+      </button>
+    </>
+  )
+}
+
 function Media({ g, p, ratio, fill }: { g: Grupo; p: PostItem; ratio: number; fill: boolean }) {
   // La pieza final que armó el worker: es exactamente lo que se publica.
   if (p.renderUrl) {
     // Un reel armado con una foto es video aunque el original sea foto.
     return /\.mp4(\?|$)/.test(p.renderUrl) ? (
-      // Arranca sin sonido (el navegador no deja otra cosa); con los controles se activa el audio.
-      <video src={p.renderUrl} className="block w-full" muted playsInline autoPlay loop controls />
+      <div className="relative">
+        <VideoConSonido src={p.renderUrl} className="block w-full" />
+      </div>
     ) : (
       // eslint-disable-next-line @next/next/no-img-element
       <img src={p.renderUrl} alt="" className="block w-full" />
@@ -97,7 +141,7 @@ function Media({ g, p, ratio, fill }: { g: Grupo; p: PostItem; ratio: number; fi
   return (
     <div className={cn("relative w-full overflow-hidden", g.isVideo && fill ? "bg-black" : "bg-neutral-100")} style={{ aspectRatio: ratio }}>
       {g.isVideo ? (
-        <video src={g.mediaUrl} className={fg} muted playsInline autoPlay loop />
+        <VideoConSonido src={g.mediaUrl} className={fg} />
       ) : (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
