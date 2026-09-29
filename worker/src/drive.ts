@@ -1,9 +1,11 @@
 /**
- * Google Drive de Content OS (PLAN §8): cuenta javiercardonibetti@gmail.com por OAuth,
- * permiso drive.file (solo ve lo que crea el propio sistema). Lo conecta el script
- * scripts/drive-conectar.py; acá se usa la llave permanente (refresh token).
+ * Google Drive de Content OS (PLAN §8): cuenta javiercardonibetti@gmail.com por OAuth.
+ * Permisos: drive.file (escribe lo suyo) + drive.readonly (LEE la base de fotos de cada marca,
+ * aunque la haya subido Javier a mano). Lo conecta scripts/drive-conectar.py; acá se usa la
+ * llave permanente (refresh token).
  *
- * Estructura: Content OS/10_ORIGINALS/<marca>/<AAAA-MM>/…  Nunca se borra nada.
+ * Estructura: Content OS/10_ORIGINALS/<marca>/<AAAA-MM>/…  y  Content OS/00_BASE/<marca>/ (base
+ * de fotos por defecto). Nunca se borra ni se mueve nada.
  */
 import { PermanentError } from "./queue.ts"
 
@@ -12,6 +14,9 @@ const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 const FOLDER = "application/vnd.google-apps.folder"
 
 export type Drive = ReturnType<typeof createDrive>
+export type DriveFile = { id: string; name: string; mimeType: string; size?: string; createdTime?: string; md5Checksum?: string }
+const FILE_FIELDS = "id,name,mimeType,size,createdTime,md5Checksum"
+export const FOLDER_MIME = FOLDER
 
 /** null si faltan las variables: el sistema sigue andando, solo que sin archivar en Drive. */
 export function driveFromEnv(): Drive | null {
@@ -85,6 +90,48 @@ function createDrive(cfg: { clientId: string; clientSecret: string; refreshToken
   }
 
   return {
+    /** Carpeta de la ruta dada bajo la raíz de Content OS (la crea si falta). */
+    path,
+
+    /** Datos de un archivo o carpeta. PermanentError si no existe o no se puede ver. */
+    async meta(fileId: string): Promise<DriveFile> {
+      return call<DriveFile>("GET", `files/${encodeURIComponent(fileId)}`, { fields: FILE_FIELDS, supportsAllDrives: "true" })
+    },
+
+    /**
+     * Todos los archivos debajo de una carpeta (recorre subcarpetas). `path` es la ruta de
+     * subcarpetas desde la raíz dada: sirve de contexto ("Promo invierno 2024/…").
+     */
+    async listTree(rootId: string, maxFiles = 100_000): Promise<(DriveFile & { path: string })[]> {
+      const out: (DriveFile & { path: string })[] = []
+      const pending: { id: string; path: string }[] = [{ id: rootId, path: "" }]
+      const seen = new Set<string>()
+      // Se recorre todo; el tope es solo un seguro contra carpetas absurdas (y se avisa).
+      while (pending.length) {
+        if (out.length >= maxFiles) throw new PermanentError(`la carpeta tiene más de ${maxFiles} archivos: dividila en subcarpetas por marca`)
+        const dir = pending.shift()!
+        if (seen.has(dir.id)) continue // accesos directos o carpetas en dos lugares
+        seen.add(dir.id)
+        let pageToken: string | undefined
+        do {
+          const r = await call<{ files: DriveFile[]; nextPageToken?: string }>("GET", "files", {
+            q: `'${quote(dir.id)}' in parents and trashed = false`,
+            fields: `nextPageToken, files(${FILE_FIELDS})`,
+            pageSize: "1000",
+            supportsAllDrives: "true",
+            includeItemsFromAllDrives: "true",
+            ...(pageToken ? { pageToken } : {}),
+          })
+          for (const f of r.files) {
+            if (f.mimeType === FOLDER) pending.push({ id: f.id, path: dir.path ? `${dir.path}/${f.name}` : f.name })
+            else out.push({ ...f, path: dir.path })
+          }
+          pageToken = r.nextPageToken
+        } while (pageToken)
+      }
+      return out
+    },
+
     /** Archivo ya subido para este asset (lo marca appProperties): evita duplicar en un reintento. */
     async findByAsset(assetId: string): Promise<{ id: string; md5Checksum?: string } | null> {
       const q = `appProperties has { key='cos_asset_id' and value='${quote(assetId)}' } and trashed = false`

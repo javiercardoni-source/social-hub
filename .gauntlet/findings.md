@@ -19,3 +19,9 @@
 | 15 | QA visual | P0→✗ | "Hash '' vs renderKey 'bottom'" | No: layout null = abajo siempre; clave de archivo ≠ contenido | Descartado |
 | 16 | QA visual | P2→✗ | "Posts aprobados antes de 0008 quedan con hash viejo" | Verificado: no había ninguno | Descartado |
 | 17 | QA visual | P1 | (builder) Reemplazo de sección borró 3 handlers | Sí (lo detectó el typecheck) | Restaurado + diff contra HEAD |
+
+## Base de fotos (Drive por tandas) — 29-09-2026
+- **18 · P1 REAL (arreglado):** `archive:import-drive-file` validaba `file_id` con `idFrom` (formato UUID); los ids de Drive no son UUID → no se habría importado nada. Nuevo `esIdDrive` (shared/cos/base-fotos.ts) + test.
+- **19 · P2 REAL (arreglado):** `listTree` cortaba el recorrido al llegar a 20.000 archivos y salteaba carpetas en silencio. Ahora recorre todo y, pasado un tope de 100.000, falla con un mensaje claro.
+- **20 · FALSO POSITIVO:** "descarga antes de chequear duplicado": el chequeo ya estaba antes de la descarga.
+- **21 · Descartado:** paginación de ya-traídos de a 1000: lecturas livianas, sin impacto.

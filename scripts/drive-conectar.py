@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Autoriza Content OS en Google Drive (una sola vez) y arma su carpeta propia.
 
-Usa el scope drive.file: el sistema solo ve lo que él mismo crea, nunca el resto del Drive.
+Permisos: drive.file (escribe solo en lo suyo) + drive.readonly (lee la "base de fotos" de
+cada marca, aunque la hayas subido a mano). Nunca mueve ni borra nada tuyo.
 Se vuelve a correr si se revoca el acceso desde myaccount.google.com.
 """
 import base64
@@ -22,10 +23,10 @@ CLIENTE = os.path.join(CRED_DIR, "google-drive-oauth-client.json")
 DESTINO = os.path.join(CRED_DIR, "google-drive-content-os.json")
 CUENTA = "javiercardonibetti@gmail.com"
 COMPARTIR_CON = "javiercardoni@gmail.com"
-SCOPE = "https://www.googleapis.com/auth/drive.file"
+SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly"
 PUERTO = 8765
 MARCAS = ["fasutofudo", "bijutsukan", "sensaciones"]
-ESTRUCTURA = ["10_ORIGINALS", "20_GENERATED", "50_PUBLISHED_EXPORTS", "90_ARCHIVE", "_backups"]
+ESTRUCTURA = ["00_BASE", "10_ORIGINALS", "20_GENERATED", "50_PUBLISHED_EXPORTS", "90_ARCHIVE", "_backups"]
 
 
 def post(url, data):
@@ -118,6 +119,8 @@ def main():
     if "refresh_token" not in tok:
         sys.exit("✗ Google no devolvió la llave permanente. Revocá el acceso en myaccount.google.com y volvé a correrlo.")
     access = tok["access_token"]
+    if "drive.readonly" not in tok.get("scope", ""):
+        sys.exit("✗ Falta el permiso de ver los archivos de Drive (quedó destildado). Volvé a correrlo y dejá tildadas todas las casillas.")
 
     about = drive("GET", "about", access, fields="user(emailAddress),storageQuota")
     email = about["user"]["emailAddress"]
@@ -129,7 +132,7 @@ def main():
     ids = {"root": raiz}
     for sub in ESTRUCTURA:
         ids[sub] = carpeta(access, sub, raiz)
-        if sub in ("10_ORIGINALS", "20_GENERATED", "50_PUBLISHED_EXPORTS"):
+        if sub in ("00_BASE", "10_ORIGINALS", "20_GENERATED", "50_PUBLISHED_EXPORTS"):
             for m in MARCAS:
                 ids[f"{sub}/{m}"] = carpeta(access, m, ids[sub])
 
@@ -157,6 +160,7 @@ def main():
     print(f"  Carpeta: https://drive.google.com/drive/folders/{raiz}")
     print(f"  Marcas: {', '.join(MARCAS)}")
     print(f"  Compartida con {COMPARTIR_CON} (editor): la ves en «Compartido conmigo»")
+    print(f"  Base de fotos por marca: Content OS/00_BASE/<marca> (o compartí tu carpeta con {CUENTA})")
     print(f"\n✓ Guardado en {DESTINO}\n  Avisale a Daniela que ya está.")
 
 

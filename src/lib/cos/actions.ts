@@ -1,5 +1,6 @@
 "use server"
 
+import { TANDAS, carpetaDeLink } from "../../../shared/cos/base-fotos"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -359,4 +360,32 @@ export async function importarInstagram(brandId: string) {
   }
   revalidatePath("/media")
   return { encolados: faltan.length, minutos: Math.ceil((faltan.length * 20) / 60) }
+}
+
+/** Trae la próxima tanda de la base de fotos (Drive) de una marca. El worker elige y encola. */
+export async function traerDeBase(brandId: string, cantidad: number) {
+  await requireMember("approver")
+  if (!TANDAS.includes(cantidad as (typeof TANDAS)[number])) throw aviso("Cantidad inválida")
+  const db = createAdminClient()
+  const { error } = await db.rpc("cos_enqueue_job", {
+    p_type: "archive:scan-drive",
+    p_payload: { brand_id: brandId, limite: cantidad },
+    p_run_at: new Date().toISOString(),
+    p_dedupe_key: `scan-drive:${brandId}`,
+  })
+  if (error) throw aviso(`No se pudo pedir la tanda: ${error.message}`)
+  // Se limpia el estado anterior: la pantalla muestra "buscando…" hasta que el worker responda.
+  await db.from("cos_brands").update({ base_estado: { at: new Date().toISOString(), buscando: true, pedidos: cantidad } }).eq("id", brandId)
+  revalidatePath("/media")
+}
+
+/** Cambia la carpeta de Drive que es la base de fotos de la marca (acepta el link de la carpeta). */
+export async function cambiarCarpetaBase(brandId: string, link: string) {
+  await requireMember("approver")
+  const id = link.trim() ? carpetaDeLink(link) : null
+  if (link.trim() && !id) throw aviso("Ese link no parece de una carpeta de Drive. Abrí la carpeta en Drive y copiá el link de la barra del navegador.")
+  const db = createAdminClient()
+  const { error } = await db.from("cos_brands").update({ base_folder_id: id, base_folder_name: null, base_estado: null }).eq("id", brandId)
+  if (error) throw aviso(`No se pudo guardar la carpeta: ${error.message}`)
+  revalidatePath("/media")
 }

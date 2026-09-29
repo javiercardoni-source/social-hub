@@ -22,7 +22,8 @@ import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
 import { fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, withTmp, writeTmp } from "./media.ts"
 import { classify, writeCaption } from "./ai.ts"
-import { driveFromEnv } from "./drive.ts"
+import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
+import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, loadRenderPost, renderReviewed } from "./render.ts"
 import { syncAccount } from "./metrics.ts"
 import { arDay, contextForBrand, syncContext } from "./context.ts"
@@ -63,6 +64,12 @@ function idFrom(job: Job, key: string): string {
   return v
 }
 
+function driveIdFrom(job: Job, key: string): string {
+  const v = job.payload[key]
+  if (!esIdDrive(v)) throw new PermanentError(`payload sin ${key} de Drive válido`)
+  return v
+}
+
 async function must<T>(p: PromiseLike<{ data: T | null; error: { message: string } | null }>, what: string): Promise<T> {
   const { data, error } = await p
   if (error) throw new Error(`${what}: ${error.message}`)
@@ -90,6 +97,7 @@ type AssetRow = {
   id: string
   brand_id: string
   status: string
+  source: string
   description: string | null
   submitted_by_label: string | null
   mime: string | null
@@ -99,7 +107,7 @@ type AssetRow = {
   current_version_id: string | null
 }
 const ASSET_COLS =
-  "id, brand_id, status, description, submitted_by_label, mime, media_type, storage_driver, storage_key, current_version_id"
+  "id, brand_id, status, source, description, submitted_by_label, mime, media_type, storage_driver, storage_key, current_version_id"
 
 // ── asset:process ───────────────────────────────────────────────────────────
 const processAsset: Handler = async (job, { db, queue, log }) => {
@@ -184,7 +192,8 @@ const processAsset: Handler = async (job, { db, queue, log }) => {
     "asset",
   )
   await queue.enqueue("asset:classify", { asset_id: a.id }, { dedupeKey: `classify:${a.id}` })
-  if (driveFromEnv()) await queue.enqueue("asset:archive", { asset_id: a.id }, { dedupeKey: `archive:${a.id}` })
+  // Lo que vino de la base de fotos ya está en Drive: no se copia otra vez.
+  if (driveFromEnv() && a.source !== "drive") await queue.enqueue("asset:archive", { asset_id: a.id }, { dedupeKey: `archive:${a.id}` })
   log("asset listo", { asset: a.id, type: meta.info.mediaType, w: meta.info.width, h: meta.info.height })
 }
 
@@ -814,6 +823,146 @@ const importInstagram: Handler = async (job, { db, queue, log }) => {
   log("importado de Instagram al Archivo", { media: m.id, asset: asset.id })
 }
 
+// ── archive:scan-drive (base de fotos) ──────────────────────────────────────
+const BASE_SPACING_MS = 20_000 // una foto cada 20 s: la IA analiza de a poco
+
+/** Guarda cómo quedó la última tanda (lo muestra la pantalla de Archivo). */
+async function setBaseEstado(db: SupabaseClient, brandId: string, estado: Record<string, unknown>) {
+  await db.from("cos_brands").update({ base_estado: { at: new Date().toISOString(), ...estado } }).eq("id", brandId)
+}
+
+/**
+ * Recorre la base de fotos de la marca y encola la próxima tanda (los más nuevos primero).
+ * Solo lee: nunca mueve ni borra nada en Drive.
+ */
+const scanDrive: Handler = async (job, { db, queue, log }) => {
+  const brandId = idFrom(job, "brand_id")
+  const limite = Math.min(200, Math.max(1, Number(job.payload.limite) || 50))
+  const drive = driveFromEnv()
+  if (!drive) throw new PermanentError("Drive no está conectado en el servidor")
+  const { data: b, error } = await db.from("cos_brands").select("id, slug, base_folder_id").eq("id", brandId).single()
+  if (error || !b) throw new PermanentError(`marca ${brandId}: ${error?.message ?? "no existe"}`)
+
+  let folderId = b.base_folder_id as string | null
+  let folderName: string
+  try {
+    if (!folderId) {
+      folderId = await drive.path(["00_BASE", b.slug])
+      folderName = `Content OS/00_BASE/${b.slug}`
+    } else {
+      const m = await drive.meta(folderId)
+      if (m.mimeType !== FOLDER_MIME) throw new PermanentError("el link no es de una carpeta")
+      folderName = m.name
+    }
+    await db.from("cos_brands").update({ base_folder_id: folderId, base_folder_name: folderName }).eq("id", brandId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const permiso = /403|404|insufficient|scope/i.test(msg)
+    await setBaseEstado(db, brandId, {
+      error: permiso
+        ? "No puedo ver esa carpeta. Compartila con javiercardonibetti@gmail.com (lector alcanza) y, si ya lo hiciste, falta reconectar Drive con el permiso nuevo."
+        : `No pude abrir la carpeta: ${msg.slice(0, 200)}`,
+    })
+    log("base de fotos: no se pudo abrir la carpeta", { brand: brandId, error: msg })
+    return
+  }
+
+  let archivos: Awaited<ReturnType<typeof drive.listTree>>
+  try {
+    archivos = await drive.listTree(folderId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    await setBaseEstado(db, brandId, { error: `No pude recorrer la carpeta (${msg.slice(0, 160)}). Se reintenta sola en unos minutos.` })
+    throw e
+  }
+  // Ya traídos (paginado: pueden ser miles) y en camino (trabajos en la cola).
+  const ya = new Set<string>()
+  for (let from = 0; ; from += 1000) {
+    const { data } = await db.from("cos_assets").select("source_external_id").eq("brand_id", brandId).eq("source", "drive").range(from, from + 999)
+    for (const r of data ?? []) if (r.source_external_id) ya.add(r.source_external_id)
+    if (!data || data.length < 1000) break
+  }
+  const { data: cola } = await db
+    .from("cos_jobs")
+    .select("payload, run_at")
+    .eq("type", "archive:import-drive-file")
+    .in("status", ["queued", "running"])
+  const enCamino = new Set((cola ?? []).map((j) => (j.payload as { file_id?: string }).file_id).filter(Boolean) as string[])
+
+  const t = elegirTanda(archivos, ya, enCamino, limite)
+  // La tanda nueva arranca después de la última ya programada (de cualquier marca).
+  let at = Math.max(Date.now(), ...(cola ?? []).map((j) => new Date(j.run_at as string).getTime()))
+  for (const f of t.elegidos) {
+    at += BASE_SPACING_MS
+    await queue.enqueue(
+      "archive:import-drive-file",
+      { brand_id: brandId, file_id: f.id, path: f.path, name: f.name },
+      { runAt: new Date(at), dedupeKey: `import-drive:${f.id}` },
+    )
+  }
+  await setBaseEstado(db, brandId, {
+    error: null,
+    pedidos: t.elegidos.length,
+    total: t.total,
+    ya_traidos: t.yaTraidos,
+    en_camino: enCamino.size + t.elegidos.length,
+    quedan: t.quedan,
+    pesados: t.pesados,
+    no_soportados: t.noSoportados,
+    termina: new Date(at).toISOString(),
+  })
+  log("base de fotos: tanda encolada", { brand: brandId, pedidos: t.elegidos.length, quedan: t.quedan })
+}
+
+// ── archive:import-drive-file ───────────────────────────────────────────────
+/** Trae un archivo de la base de fotos al Archivo (copia en cos-media; el original queda en Drive). */
+const importDriveFile: Handler = async (job, { db, queue, log }) => {
+  const brandId = idFrom(job, "brand_id")
+  const fileId = driveIdFrom(job, "file_id")
+  const ruta = typeof job.payload.path === "string" ? job.payload.path : ""
+  const { data: ya } = await db.from("cos_assets").select("id").eq("source", "drive").eq("source_external_id", fileId).maybeSingle()
+  if (ya) return
+  const drive = driveFromEnv()
+  if (!drive) throw new Error("Drive no está conectado en el servidor")
+  const f = await drive.meta(fileId)
+  const ext = BASE_MIMES[f.mimeType]
+  if (!ext) return log("base de fotos: formato no soportado (se saltea)", { file: fileId, mime: f.mimeType })
+  if (Number(f.size ?? 0) > BASE_MAX_BYTES) return log("base de fotos: demasiado pesado (se saltea)", { file: fileId, size: f.size })
+
+  const data = await drive.download(fileId)
+  const { data: brand } = await db.from("cos_brands").select("slug").eq("id", brandId).single()
+  const key = `originals/${brand?.slug ?? "sin-marca"}/drive/${fileId}.${ext}`
+  await supabaseStorage(db).upload(key, data, f.mimeType === "image/heif" ? "image/heic" : f.mimeType)
+  const origen = ruta ? `${ruta}/${f.name}` : f.name
+  const { data: asset, error } = await db
+    .from("cos_assets")
+    .insert({
+      brand_id: brandId,
+      source: "drive",
+      source_external_id: fileId,
+      // Provisoria: la IA la reemplaza con lo que ve. El nombre de la carpeta le da contexto.
+      description: `Base de fotos: ${origen}`.slice(0, 300),
+      description_by_ai: true,
+      submitted_by_label: "Base de fotos",
+      mime: f.mimeType === "image/heif" ? "image/heic" : f.mimeType,
+      size_bytes: data.byteLength,
+      storage_driver: "supabase",
+      storage_key: key,
+      status: "NEW",
+      review_status: "pending",
+      origin_path: origen.slice(0, 500),
+    })
+    .select("id")
+    .single()
+  if (error || !asset) {
+    // Otra corrida lo insertó justo antes (clave única): no es un error.
+    if (error?.code === "23505") return
+    throw new Error(`asset: ${error?.message}`)
+  }
+  await queue.enqueue("asset:process", { asset_id: asset.id }, { dedupeKey: `process:${asset.id}` })
+  log("base de fotos: traído al Archivo", { brand: brandId, file: fileId, asset: asset.id })
+}
+
 // ── ingest:turnos (F3) ─────────────────────────────────────────────────────
 const ingestTurnosJob: Handler = async (_job, { db, queue, log }) => {
   const r = await ingestTurnos(db, queue, log)
@@ -933,6 +1082,8 @@ export const handlers: Record<string, Handler> = {
   "metrics:sync": syncMetrics,
   "context:sync": syncContextJob,
   "archive:import-ig": importInstagram,
+  "archive:scan-drive": scanDrive,
+  "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,
 }
