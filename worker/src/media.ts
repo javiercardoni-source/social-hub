@@ -297,3 +297,25 @@ export async function placaFondo(hex: string, dir: string): Promise<Buffer> {
   )
   return readFile(out)
 }
+
+/**
+ * Imagen de la grilla del perfil (3 columnas, miniaturas 3:4) para que la IA la mire entera.
+ * Cada casilla sin imagen va en gris. Máximo 18 casillas (6 filas).
+ */
+export async function grillaImagen(imgs: (Buffer | null)[], dir: string): Promise<Buffer> {
+  const n = Math.min(18, imgs.length)
+  const filas = Math.max(1, Math.ceil(n / 3))
+  for (let i = 0; i < filas * 3; i++) {
+    const out = join(dir, `g${String(i).padStart(2, "0")}.jpg`)
+    const img = imgs[i]
+    if (img && i < n) {
+      const src = await writeTmp(dir, `src${i}`, img)
+      await run("ffmpeg", ["-y", "-i", src, "-vf", "scale=300:400:force_original_aspect_ratio=increase,crop=300:400", "-frames:v", "1", "-q:v", "4", out], { timeout: FF_TIMEOUT_MS })
+    } else {
+      await run("ffmpeg", ["-y", "-f", "lavfi", "-i", "color=c=0xDDDDDD:s=300x400", "-frames:v", "1", out], { timeout: FF_TIMEOUT_MS })
+    }
+  }
+  const out = join(dir, "grilla.jpg")
+  await run("ffmpeg", ["-y", "-framerate", "1", "-i", join(dir, "g%02d.jpg"), "-vf", `tile=3x${filas}:padding=6:color=white`, "-frames:v", "1", "-q:v", "3", out], { timeout: FF_TIMEOUT_MS })
+  return readFile(out)
+}

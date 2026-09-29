@@ -10,7 +10,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
-import { BarChart3, LogOut, Palette, User as UserIcon } from "lucide-react"
+import { BarChart3, LayoutGrid, LogOut, Palette, User as UserIcon } from "lucide-react"
 import { logout } from "@/app/login/actions"
 
 export async function UserMenu() {
@@ -39,6 +39,12 @@ export async function UserMenu() {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/feed" className="cursor-pointer">
+            <LayoutGrid className="h-4 w-4" />
+            Feed
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/analytics" className="cursor-pointer">
             <BarChart3 className="h-4 w-4" />

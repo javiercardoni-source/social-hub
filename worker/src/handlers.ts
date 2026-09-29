@@ -20,8 +20,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
-import { compactVideo, framesAt, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { analyzeReference, classify, writeCaption, writeHolidayPhrase } from "./ai.ts"
+import { compactVideo, framesAt, grillaImagen, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
+import { analyzeGrid, analyzeReference, classify, writeCaption, writeHolidayPhrase } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, exists, loadRenderPost, renderReviewed } from "./render.ts"
@@ -47,6 +47,7 @@ import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts
 import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
+import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
 
 export type HandlerContext = {
   db: SupabaseClient
@@ -1199,6 +1200,109 @@ const analyzeRef: Handler = async (job, { db, log }) => {
   }
 }
 
+// ── feed:analyze (F6) ───────────────────────────────────────────────────────
+/**
+ * La IA mira la grilla del perfil de Instagram tal como va a quedar (lo publicado + lo que está
+ * por salir) con las métricas de la cuenta, y deja observaciones, un estilo por columna sugerido
+ * y cambios de orden propuestos. No toca ningún post.
+ */
+const analyzeFeed: Handler = async (job, { db, log }) => {
+  const brandId = idFrom(job, "brand_id")
+  const conPendientes = job.payload.con_pendientes === true
+  const guardar = (x: Record<string, unknown>) =>
+    db.from("cos_brands").update({ feed_analisis: x, ...(x.status === "lista" ? { feed_analisis_at: new Date().toISOString() } : {}) }).eq("id", brandId)
+  try {
+    const { data: acc } = await db.from("cos_social_accounts").select("id").eq("brand_id", brandId).eq("platform", "instagram").neq("status", "disabled").limit(1).maybeSingle()
+    if (!acc) throw new PermanentError("la marca no tiene Instagram conectado")
+    const desde90 = new Date(Date.now() - 90 * 86_400_000).toISOString()
+    const [{ data: media }, { data: posts }, { data: b }, { data: hist }] = await Promise.all([
+      db.from("cos_media").select("id, format, posted_at, thumb_key, metrics").eq("account_id", acc.id).neq("format", "story").order("posted_at", { ascending: false }).limit(30),
+      db
+        .from("cos_posts")
+        .select("id, status, post_type, scheduled_at, template, overlay_text, render_key, cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(thumb_key)))")
+        .eq("account_id", acc.id)
+        .in("post_type", ["feed", "reel", "carousel"])
+        .in("status", conPendientes ? ["APPROVED", "SCHEDULED", "PENDING_APPROVAL"] : ["APPROVED", "SCHEDULED"])
+        .is("deleted_at", null),
+      db.from("cos_brands").select("grid_style").eq("id", brandId).single(),
+      db.from("cos_media").select("format, metrics").eq("account_id", acc.id).neq("format", "story").gte("posted_at", desde90),
+    ])
+    type P = { id: string; status: string; post_type: "feed" | "reel" | "carousel"; scheduled_at: string | null; template: string; overlay_text: string | null; render_key: string | null; cos_post_media: { position: number; cos_asset_versions: { cos_assets: { thumb_key: string | null } | null } | null }[] }
+    const claves = new Map<string, string | null>()
+    const alcance = new Map<string, number | null>()
+    const piezas: Pieza[] = [
+      ...((posts ?? []) as unknown as P[]).map((p) => {
+        const thumb = [...p.cos_post_media].sort((x, y) => x.position - y.position)[0]?.cos_asset_versions?.cos_assets?.thumb_key ?? null
+        claves.set(p.id, p.render_key?.endsWith(".jpg") ? p.render_key : thumb)
+        return {
+          id: p.id,
+          estado: p.status === "PENDING_APPROVAL" ? ("pendiente" as const) : ("programado" as const),
+          at: p.status === "PENDING_APPROVAL" ? null : (p.scheduled_at ?? new Date().toISOString()),
+          formato: p.post_type,
+          conTexto: llevaTexto(p.template, p.overlay_text),
+        }
+      }),
+      ...(media ?? []).map((m) => {
+        claves.set(m.id, m.thumb_key)
+        const mt = (m.metrics ?? {}) as Record<string, number>
+        alcance.set(m.id, mt.reach || mt.views || null)
+        return { id: m.id, estado: "publicado" as const, at: m.posted_at, formato: m.format as Pieza["formato"], conTexto: null }
+      }),
+    ]
+    const grilla = ordenarGrilla(piezas).slice(0, 18)
+    const imgs = await Promise.all(
+      grilla.map((g) => {
+        const k = claves.get(g.id)
+        return k ? supabaseStorage(db).download(k).catch(() => null) : Promise.resolve(null)
+      }),
+    )
+    const imagen = await withTmp((dir) => grillaImagen(imgs, dir))
+    const fmt = (iso: string) => new Date(iso).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "numeric", month: "numeric" })
+    const posiciones = grilla.map((g, i) =>
+      g.estado === "publicado"
+        ? `${i + 1}. publicada el ${fmt(g.at!)} · ${g.formato}${alcance.get(g.id) ? ` · alcance ${alcance.get(g.id)!.toLocaleString("es-AR")}` : ""}`
+        : `${i + 1}. POR SALIR (${g.estado === "pendiente" ? "pendiente de aprobar" : `programada ${fmt(g.at!)}`}) · ${g.formato} · ${g.conTexto ? "con texto" : "sin texto"}`,
+    )
+    // Rendimiento por formato: mediana de alcance (o vistas) de los últimos 90 días.
+    const porFormato = new Map<string, number[]>()
+    for (const h of hist ?? []) {
+      const mt = (h.metrics ?? {}) as Record<string, number>
+      const v = mt.reach || mt.views
+      if (v) porFormato.set(h.format, [...(porFormato.get(h.format) ?? []), v])
+    }
+    const mediana = (xs: number[]) => [...xs].sort((a, c) => a - c)[Math.floor(xs.length / 2)]
+    const rendimiento =
+      [...porFormato.entries()].map(([f, xs]) => `${f}: mediana ${mediana(xs).toLocaleString("es-AR")} (${xs.length} publicaciones)`).join(" · ") || "sin datos suficientes"
+
+    const s = await settings(db)
+    const r = await analyzeGrid({
+      db,
+      model: s.ai_model,
+      brand: await brandContext(db, brandId),
+      grilla: imagen,
+      posiciones,
+      rendimiento,
+      estiloActual: describirEstilo(normalizarEstilo(b?.grid_style)),
+    })
+    // Lo que la IA ve en lo ya publicado queda guardado (sirve para marcar el estilo en la grilla).
+    for (const [i, g] of grilla.entries()) {
+      if (g.estado === "publicado" && typeof r.con_texto[i] === "boolean") await db.from("cos_media").update({ con_texto: r.con_texto[i] }).eq("id", g.id)
+    }
+    await guardar({
+      status: "lista",
+      resumen: r.resumen,
+      observaciones: r.observaciones,
+      estilo_sugerido: r.estilo_sugerido ? { columnas: [r.estilo_sugerido.izquierda, r.estilo_sugerido.centro, r.estilo_sugerido.derecha], por_que: r.estilo_sugerido.por_que } : null,
+      cambios_de_orden: r.cambios_de_orden,
+      otras_ideas: r.otras_ideas,
+    })
+    log("grilla analizada", { brand: brandId, posiciones: grilla.length })
+  } catch (e) {
+    await guardar({ status: "error", error: (e instanceof Error ? e.message : String(e)).slice(0, 300) })
+    throw e
+  }
+}
+
 // ── ingest:turnos (F3) ─────────────────────────────────────────────────────
 const ingestTurnosJob: Handler = async (_job, { db, queue, log }) => {
   const r = await ingestTurnos(db, queue, log)
@@ -1321,6 +1425,7 @@ export const handlers: Record<string, Handler> = {
   "archive:scan-drive": scanDrive,
   "ref:analyze": analyzeRef,
   "holiday:stories": holidayStories,
+  "feed:analyze": analyzeFeed,
   "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,

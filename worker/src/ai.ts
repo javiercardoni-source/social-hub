@@ -317,3 +317,61 @@ export async function writeHolidayPhrase(opts: { db: SupabaseClient; model: stri
   if (!frase) throw new Error(`la IA no devolvió la frase (stop: ${response.stop_reason})`)
   return frase.slice(0, 60)
 }
+
+const Regla = z.enum(["con_texto", "sin_texto", "libre"])
+export const AnalisisGrilla = z.object({
+  resumen: z.string().describe("Una o dos líneas: cómo se ve hoy el perfil y qué es lo más importante a mejorar"),
+  con_texto: z.array(z.boolean()).describe("Para CADA posición de la grilla, en orden: true si la imagen lleva texto encima (título, precio, frase), false si es foto limpia"),
+  observaciones: z.array(z.string()).describe("Qué se ve en la grilla: equilibrio claro/oscuro, repeticiones de producto, exceso de texto, variedad de formatos. Mencioná posiciones (ej: 'posiciones 1 a 3')"),
+  estilo_sugerido: z
+    .object({ izquierda: Regla, centro: Regla, derecha: Regla, por_que: z.string() })
+    .nullable()
+    .describe("Regla por columna (izquierda, centro, derecha) que haría ver el perfil más ordenado, o null si no conviene fijar ninguna"),
+  cambios_de_orden: z.array(z.string()).describe("Cambios concretos en lo que está por salir (ej: 'pasá la posición 2 después de la 4 para no juntar dos placas con precio'). Vacío si está bien"),
+  otras_ideas: z.array(z.string()).describe("Ideas de formato o contenido según las métricas (ej: 'los reels rinden 2x: sumá uno cada 3 posts')"),
+})
+export type AnalisisGrilla = z.infer<typeof AnalisisGrilla>
+
+/** La IA mira la grilla del perfil (imagen) con los datos de cada posición y las métricas. */
+export async function analyzeGrid(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  grilla: Buffer
+  posiciones: string[]
+  rendimiento: string
+  estiloActual: string
+}): Promise<AnalisisGrilla> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 6000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: opts.grilla.toString("base64") } },
+          {
+            type: "text",
+            text: [
+              "Sos community manager y director de arte. Esta imagen es la GRILLA DEL PERFIL de Instagram de la marca tal como va a quedar: 3 columnas, se lee por filas de izquierda a derecha; la posición 1 es arriba a la izquierda (lo más nuevo).",
+              "Posiciones (en orden):",
+              ...opts.posiciones,
+              "",
+              `Rendimiento real de la cuenta (últimos 90 días): ${opts.rendimiento}`,
+              `Estilo de grilla que tiene configurado: ${opts.estiloActual}`,
+              "",
+              "Analizá el perfil como un todo: equilibrio claro/oscuro, repeticiones (mismo producto o misma composición juntos), cantidad de texto, variedad de formatos. " +
+                "Sugerí un estilo por columna solo si mejora el orden visual (ej: centro sin texto y laterales con texto). " +
+                "Recordá que el patrón por columnas se sostiene publicando de a 3. Sé concreto y breve; no inventes datos que no estén acá.",
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(AnalisisGrilla) },
+  })
+  await logUsage(opts.db, { purpose: "feed:analyze", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió el análisis (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}

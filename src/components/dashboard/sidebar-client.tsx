@@ -17,6 +17,7 @@ import {
   Loader2,
   Palette,
   BarChart3,
+  LayoutGrid,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { elegirMarca } from "@/lib/cos/brand-actions"
@@ -54,6 +55,7 @@ export function SidebarClient({ brands, activeSlug, pendingCount, mediaCount, gl
     { name: "Biblioteca", href: "/media", icon: Images, count: mediaCount > 0 ? mediaCount : null, countSoft: true },
     { name: "Aprobaciones", href: "/aprobaciones", icon: CheckCircle, count: pendingCount > 0 ? pendingCount : null },
     { name: "Calendario", href: "/calendar", icon: CalendarDays },
+    { name: "Feed", href: "/feed", icon: LayoutGrid },
     { name: "Métricas", href: "/analytics", icon: BarChart3 },
     { name: "Cuentas", href: "/accounts", icon: Link2 },
     { name: "Marca", href: "/marca", icon: Palette },
