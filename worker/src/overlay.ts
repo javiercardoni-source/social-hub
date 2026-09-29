@@ -89,7 +89,7 @@ export const KITS: Record<string, Kit> = {
     text: "#FFFFFF",
     band: "rgba(0,0,0,0.82)",
     label: { bg: "#FFFFFF", text: "#3F3F3F" },
-    wordmark: "Sensaciones de Oriente",
+    // Sin logo ni nombre: así son sus placas (Javier, 29-09-2026).
     defaultTemplate: "etiqueta",
   },
 }
@@ -116,7 +116,8 @@ async function logoData(file: string) {
   return logoCache.get(file)!
 }
 
-async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El> {
+/** El logo, o el nombre escrito; null si la marca va sin firma (Sensaciones). */
+async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El | null> {
   if (kit.logo) {
     // Redondo: un círculo de `size`. Alargado (ancho ≥ 2 veces el alto): ancho 1,9×size.
     // Casi cuadrado (ej. mascota + nombre): alto = size, para que no tape media foto.
@@ -128,6 +129,7 @@ async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El> 
       height: h,
     })
   }
+  if (!kit.wordmark) return null
   // Sin logo: el nombre de la marca en su tipografía, sobre una pastilla para que se lea en cualquier foto.
   return el(
     "div",
@@ -198,20 +200,20 @@ export async function renderOverlay(opts: {
           ])
         : el("div", { width: W, flexDirection: "column", alignItems: "flex-start", gap: pad * 0.35, padding: `${pad * 0.7}px ${pad}px`, backgroundColor: kit.band }, [
             title(kit.text),
-            await signature(kit, logoSize * 0.8, logoSrc),
+            ...[await signature(kit, logoSize * 0.8, logoSrc)].filter((x): x is El => !!x),
           ]),
     ])
   } else if (opts.template === "etiqueta" && text) {
     const label = el("div", { alignSelf: "flex-start", maxWidth: W * 0.82, padding: `${pad * 0.35}px ${pad * 0.55}px`, borderRadius: W * 0.025, backgroundColor: kit.label.bg }, [
       title(kit.label.text, titleSize * 0.85),
     ])
-    const sign = el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize, logoSrc)])
+    const sign = el("div", { alignSelf: "flex-end" }, [await signature(kit, logoSize, logoSrc)].filter((x): x is El => !!x))
     body = el("div", { width: W, height: H, flexDirection: "column", justifyContent: "space-between", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, top ? [label, sign] : [sign, label])
   } else {
-    // firma (o banda/etiqueta sin texto): solo el logo abajo a la derecha.
-    body = el("div", { width: W, height: H, justifyContent: "flex-end", alignItems: top ? "flex-start" : "flex-end", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [
-      await signature(kit, logoSize, logoSrc),
-    ])
+    // firma (o banda/etiqueta sin texto): solo el logo abajo a la derecha. Sin firma: nada que dibujar.
+    const sig = await signature(kit, logoSize, logoSrc)
+    if (!sig) return null
+    body = el("div", { width: W, height: H, justifyContent: "flex-end", alignItems: top ? "flex-start" : "flex-end", padding: `${safeTop}px ${pad}px ${safeBottom}px` }, [sig])
   }
 
   const fonts = [
