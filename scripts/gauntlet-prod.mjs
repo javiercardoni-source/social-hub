@@ -60,7 +60,10 @@ for (const [nombre, device] of [
     for (const [path, must] of Object.entries(PAGES)) {
       const tag = `${nombre} ${brand || "todas"} ${path}`
       jsErrors.length = 0
-      const res = await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" }).catch(() => null)
+      // No se espera "red quieta": Aprobaciones tiene videos en bucle y se actualiza sola, así que la
+      // red nunca se calma. Se espera a que cargue y a que aparezca el contenido que tiene que estar.
+      const res = await page.goto(`${BASE}${path}`, { waitUntil: "load", timeout: 45000 }).catch(() => null)
+      await page.getByText(must).first().waitFor({ timeout: 20000 }).catch(() => {})
       const status = res?.status() ?? 0
       const body = await page.locator("body").innerText().catch(() => "")
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth).catch(() => 0)
