@@ -21,6 +21,7 @@ export type ArchivoItem = {
   review_status: string
   category: string | null
   risk_flags: string[]
+  consent: string
   brand: { name: string; color: string } | null
   rend: Record<string, number> | null
 }
@@ -148,7 +149,7 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
                 )}
                 {estado !== "descartados" && (
                   <div className="mt-auto pt-1">
-                    <ArchivoAcciones id={r.id} listo={analizado} usado={r.review_status === "approved"} />
+                    <ArchivoAcciones id={r.id} listo={analizado} usado={r.review_status === "approved"} bloqueado={r.consent === "blocked"} />
                   </div>
                 )}
               </div>

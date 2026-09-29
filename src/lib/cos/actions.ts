@@ -311,6 +311,8 @@ export async function borrarFecha(id: string) {
 export async function usarDelArchivo(assetId: string) {
   await requireMember("editor")
   const db = createAdminClient()
+  const { data: a } = await db.from("cos_assets").select("consent").eq("id", assetId).single()
+  if (a?.consent === "blocked") throw aviso("Tiene caras de personas: tocá «Tengo permiso, usar» si tenés autorización para publicarlas.")
   const { data, error } = await db
     .from("cos_assets")
     .update({ review_status: "approved" })
@@ -323,6 +325,39 @@ export async function usarDelArchivo(assetId: string) {
   const { error: je } = await db.rpc("cos_enqueue_job", { p_type: "post:draft", p_payload: { asset_id: assetId }, p_dedupe_key: `draft:${assetId}` })
   if (je) throw aviso(`No se pudo pedir los borradores: ${je.message}`)
   revalidatePath("/media")
+}
+
+/**
+ * Javier confirma que hay permiso para publicar a las personas que aparecen (la IA lo había
+ * bloqueado por caras). Queda en la auditoría quién lo confirmó. Si ya estaba elegido del
+ * Archivo o vino de la cocina, se arman los borradores.
+ */
+export async function confirmarPermiso(assetId: string, usar = true) {
+  const member = await requireMember("approver")
+  const db = createAdminClient()
+  const { data, error } = await db
+    .from("cos_assets")
+    .update({ consent: "ok", ...(usar ? { review_status: "approved" } : {}) })
+    .eq("id", assetId)
+    .eq("consent", "blocked")
+    .select("id, source, review_status, status")
+  if (error) throw aviso(`No se pudo confirmar: ${error.message}`)
+  if (!data?.length) throw aviso("Ese material ya no estaba bloqueado")
+  await db.from("cos_audit_log").insert({
+    event: "asset:consent_ok",
+    entity_type: "asset",
+    entity_id: assetId,
+    actor: member.email ?? member.userId,
+  })
+  const a = data[0]
+  const puedeBorrador = ["manual", "turnos"].includes(a.source) || a.review_status === "approved"
+  if (puedeBorrador && ["READY", "IN_USE"].includes(a.status)) {
+    // Sin clave de dedupe vieja: el intento anterior ya terminó ("sin borrador" por el bloqueo).
+    const { error: je } = await db.rpc("cos_enqueue_job", { p_type: "post:draft", p_payload: { asset_id: assetId }, p_dedupe_key: `draft:${assetId}` })
+    if (je) throw aviso(`Permiso guardado, pero no se pudieron pedir los borradores: ${je.message}`)
+  }
+  revalidatePath("/media")
+  revalidatePath("/aprobaciones")
 }
 
 export async function descartarDelArchivo(assetId: string) {

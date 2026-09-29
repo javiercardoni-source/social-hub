@@ -31,6 +31,7 @@ type Row = {
   source: string
   origin_path: string | null
   review_status: string
+  consent: string
   ai_json: { category?: string; risk_flags?: string[] } | null
   created_at: string
   cos_brands: { name: string; color: string } | null
@@ -51,7 +52,7 @@ export async function ArchivoView(props: {
   let q = db
     .from("cos_assets")
     .select(
-      "id, description, description_by_ai, media_type, status, quality_score, thumb_key, source, origin_path, review_status, ai_json, created_at, cos_brands(name, color), cos_media(metrics, posted_at)",
+      "id, description, description_by_ai, media_type, status, quality_score, thumb_key, source, origin_path, review_status, consent, ai_json, created_at, cos_brands(name, color), cos_media(metrics, posted_at)",
       { count: "exact" },
     )
     .eq("review_status", props.estado === "usados" ? "approved" : props.estado === "descartados" ? "discarded" : "pending")
@@ -138,6 +139,7 @@ export async function ArchivoView(props: {
               review_status: r.review_status,
               category: r.ai_json?.category ?? null,
               risk_flags: r.ai_json?.risk_flags ?? [],
+              consent: r.consent,
               brand: r.cos_brands,
               rend: r.cos_media?.metrics ?? null,
             }))}

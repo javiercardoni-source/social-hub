@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PenSquare, AlertTriangle, Video, Image as ImageIcon, Upload } from "lucide-react"
 import { ArchivoView, BibliotecaTabs } from "./archivo"
+import { PermisoCocina } from "./archivo-client"
 
 export const dynamic = "force-dynamic"
 
@@ -220,6 +221,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
                         <span>{formatSize(asset.size_bytes)}</span>
                       )}
                     </div>
+                    {hasConsent && <PermisoCocina id={asset.id} />}
                   </div>
                 </div>
               )

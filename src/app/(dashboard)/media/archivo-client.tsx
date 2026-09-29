@@ -4,11 +4,11 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { agregarCarpetasBase, cambiarCarpetaBase, descartarDelArchivo, importarInstagram, quitarCarpetaBase, traerDeBase, usarDelArchivo } from "@/lib/cos/actions"
+import { agregarCarpetasBase, cambiarCarpetaBase, confirmarPermiso, descartarDelArchivo, importarInstagram, quitarCarpetaBase, traerDeBase, usarDelArchivo } from "@/lib/cos/actions"
 import { TANDAS, type TipoTanda } from "../../../../shared/cos/base-fotos"
 import { explicarError } from "@/lib/ui-errors"
 
-export function ArchivoAcciones({ id, listo, usado }: { id: string; listo: boolean; usado: boolean }) {
+export function ArchivoAcciones({ id, listo, usado, bloqueado = false }: { id: string; listo: boolean; usado: boolean; bloqueado?: boolean }) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [msg, setMsg] = useState<string | null>(null)
@@ -23,11 +23,38 @@ export function ArchivoAcciones({ id, listo, usado }: { id: string; listo: boole
         setMsg(explicarError(e))
       }
     })
-  if (usado) return <p className="text-[11px] font-semibold text-emerald-700">✓ Elegido: sus borradores están en Aprobaciones</p>
+  if (usado && !bloqueado) return <p className="text-[11px] font-semibold text-emerald-700">✓ Elegido: sus borradores están en Aprobaciones</p>
+  if (bloqueado) {
+    return (
+      <div className="space-y-1">
+        <p className="rounded bg-red-50 px-1.5 py-1 text-[10px] font-semibold text-red-700">
+          Tiene caras de personas: no se publica sin permiso
+        </p>
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            className="h-7 flex-1 text-xs"
+            disabled={!listo || pending}
+            onClick={() =>
+              confirm(
+                "¿Tenés permiso de las personas que aparecen para publicarlas en las redes de la marca?\n\nSi es alguien del equipo o te autorizaron, aceptá. Si son clientes sin permiso, cancelá y descartala.",
+              ) && run(() => confirmarPermiso(id), "Armando borradores… en un par de minutos están en Aprobaciones")
+            }
+          >
+            {pending && <Loader2 className="h-3 w-3 animate-spin" />} Tengo permiso, usar
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => run(() => descartarDelArchivo(id), "Descartado")}>
+            Descartar
+          </Button>
+        </div>
+        {msg && <p className="text-[10px] text-muted-foreground">{msg}</p>}
+      </div>
+    )
+  }
   return (
     <div className="space-y-1">
       <div className="flex gap-1.5">
-        <Button size="sm" className="h-7 flex-1 text-xs" disabled={!listo || pending} onClick={() => run(() => usarDelArchivo(id), "Armando borradores…")}>
+        <Button size="sm" className="h-7 flex-1 text-xs" disabled={!listo || pending} onClick={() => run(() => usarDelArchivo(id), "Armando borradores… en un par de minutos están en Aprobaciones")}>
           {pending && <Loader2 className="h-3 w-3 animate-spin" />} Usar
         </Button>
         <Button size="sm" variant="outline" className="h-7 text-xs" disabled={pending} onClick={() => run(() => descartarDelArchivo(id), "Descartado")}>
@@ -255,6 +282,40 @@ export function TraerMaterial(props: {
           Trae las fotos más nuevas primero, de a tandas: la IA analiza solo esa tanda y aparecen acá abajo para elegir con «Usar». Nunca se mueve ni se borra nada de tu Drive.
         </p>
       )}
+    </div>
+  )
+}
+
+/** Pestaña «De la cocina»: material bloqueado por caras → confirmar permiso y seguir. */
+export function PermisoCocina({ id }: { id: string }) {
+  const router = useRouter()
+  const [pending, start] = useTransition()
+  const [msg, setMsg] = useState<string | null>(null)
+  return (
+    <div className="space-y-1 pt-1">
+      <p className="rounded bg-red-50 px-1.5 py-1 text-[10px] font-semibold text-red-700">Tiene caras de personas: no se publica sin permiso</p>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 w-full text-xs"
+        disabled={pending}
+        onClick={() =>
+          confirm("¿Tenés permiso de las personas que aparecen para publicarlas en las redes de la marca?") &&
+          start(async () => {
+            setMsg(null)
+            try {
+              await confirmarPermiso(id)
+              setMsg("Listo: los borradores van a Aprobaciones")
+              router.refresh()
+            } catch (e) {
+              setMsg(explicarError(e))
+            }
+          })
+        }
+      >
+        {pending && <Loader2 className="h-3 w-3 animate-spin" />} Tengo permiso
+      </Button>
+      {msg && <p className="text-[10px] text-muted-foreground">{msg}</p>}
     </div>
   )
 }
