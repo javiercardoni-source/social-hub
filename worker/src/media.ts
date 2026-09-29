@@ -233,3 +233,33 @@ export async function writeTmp(dir: string, name: string, data: Buffer): Promise
   await writeFile(p, data)
   return p
 }
+
+/** Tope de subida del proyecto Supabase (el bucket admite más, pero el proyecto corta en 50 MB). */
+export const UPLOAD_MAX_BYTES = 48 * 1024 * 1024
+
+/**
+ * Achica un video para que entre en el almacenamiento: lado largo hasta 1920 px, H.264 + AAC.
+ * Instagram igual lo recomprime a 1080p, así que no se pierde calidad visible. Prueba dos
+ * niveles; devuelve null si ni así entra.
+ */
+export async function compactVideo(video: Buffer, dir: string): Promise<Buffer | null> {
+  const input = await writeTmp(dir, "grande.mp4", video)
+  const { readFile } = await import("node:fs/promises")
+  for (const crf of [23, 28]) {
+    const out = `${dir}/compacto-${crf}.mp4`
+    await run(
+      "ffmpeg",
+      [
+        "-y", "-i", input,
+        "-vf", "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf), "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+        out,
+      ],
+      { timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+    )
+    const data = await readFile(out)
+    if (data.byteLength <= UPLOAD_MAX_BYTES) return data
+  }
+  return null
+}

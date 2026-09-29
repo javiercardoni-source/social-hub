@@ -20,7 +20,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
-import { fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, withTmp, writeTmp } from "./media.ts"
+import { compactVideo, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
 import { classify, writeCaption } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
@@ -210,7 +210,8 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
   const original = await storageFor(a.storage_driver, db).download(a.storage_key!)
   // Material de archivo (F2): modelo económico, y la IA escribe la descripción si era provisoria.
   const { data: extra } = await db.from("cos_assets").select("source, description_by_ai").eq("id", a.id).single()
-  const archivo = extra?.source === "archivo" || extra?.source === "instagram"
+  // Todo lo que no llega de la cocina en el momento (carpetas, Instagram, base de fotos en Drive).
+  const archivo = ["archivo", "instagram", "drive"].includes(extra?.source ?? "")
 
   const frames = await withTmp(async (dir) => {
     const file = await writeTmp(dir, "original", original)
@@ -226,6 +227,7 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
     submittedBy: a.submitted_by_label,
     mediaType: a.media_type ?? "photo",
     frames,
+    archivo,
   })
 
   // Caras de clientes o menores: se bloquea hasta que una persona lo revise (la base
@@ -967,10 +969,21 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
     if (copia?.length) return log("base de fotos: copia idéntica de algo ya traído (se saltea)", { file: fileId })
   }
 
-  const data = await drive.download(fileId)
+  let data = await drive.download(fileId)
+  let mime = f.mimeType === "image/heif" ? "image/heic" : f.mimeType
+  let extFinal = ext
+  // El almacenamiento corta en ~50 MB: los videos más pesados se achican (fotos nunca llegan a eso).
+  if (data.byteLength > UPLOAD_MAX_BYTES && mime.startsWith("video/")) {
+    const chico = await withTmp((dir) => compactVideo(data, dir))
+    if (!chico) return log("base de fotos: video demasiado pesado aun comprimido (se saltea)", { file: fileId, size: data.byteLength })
+    log("base de fotos: video comprimido para que entre", { file: fileId, antes: data.byteLength, despues: chico.byteLength })
+    data = chico
+    mime = "video/mp4"
+    extFinal = "mp4"
+  }
   const { data: brand } = await db.from("cos_brands").select("slug").eq("id", brandId).single()
-  const key = `originals/${brand?.slug ?? "sin-marca"}/drive/${fileId}.${ext}`
-  await supabaseStorage(db).upload(key, data, f.mimeType === "image/heif" ? "image/heic" : f.mimeType)
+  const key = `originals/${brand?.slug ?? "sin-marca"}/drive/${fileId}.${extFinal}`
+  await supabaseStorage(db).upload(key, data, mime)
   const origen = ruta ? `${ruta}/${f.name}` : f.name
   const { data: asset, error } = await db
     .from("cos_assets")
@@ -982,7 +995,7 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
       description: `Base de fotos: ${origen}`.slice(0, 300),
       description_by_ai: true,
       submitted_by_label: "Base de fotos",
-      mime: f.mimeType === "image/heif" ? "image/heic" : f.mimeType,
+      mime,
       size_bytes: data.byteLength,
       storage_driver: "supabase",
       storage_key: key,

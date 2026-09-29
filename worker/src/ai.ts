@@ -41,6 +41,8 @@ export async function classify(opts: {
   submittedBy: string | null
   mediaType: "photo" | "video"
   frames: Buffer[]
+  /** Material de archivo de la marca (base de fotos, carpetas, Instagram), no de la cocina hoy. */
+  archivo?: boolean
 }): Promise<Classification> {
   const response = await anthropic().messages.parse({
     model: opts.model,
@@ -61,6 +63,7 @@ export async function classify(opts: {
               submittedBy: opts.submittedBy,
               mediaType: opts.mediaType,
               frames: opts.frames.length,
+              archivo: opts.archivo,
             }),
           },
         ],

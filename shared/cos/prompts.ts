@@ -60,9 +60,14 @@ export function classifierPrompt(input: {
   submittedBy: string | null
   mediaType: "photo" | "video"
   frames: number
+  /** Material de archivo de la marca (fotógrafo, campañas, publicaciones anteriores). */
+  archivo?: boolean
 }): string {
   return [
-    "Sos el clasificador editorial de Content OS. Te llega material que mandó un empleado desde la cocina.",
+    input.archivo
+      ? "Sos el clasificador editorial de Content OS. Te llega material del ARCHIVO de la marca (sesiones de fotógrafo " +
+        "profesional, campañas y publicaciones anteriores), no algo que mandó la cocina hoy."
+      : "Sos el clasificador editorial de Content OS. Te llega material que mandó un empleado desde la cocina.",
     "",
     `Descripción del empleado: "${input.description}"`,
     `Lo mandó: ${input.submittedBy ?? "(sin dato)"}`,
@@ -78,7 +83,10 @@ export function classifierPrompt(input: {
     "- people_present: true si aparece cualquier persona (manos con guantes no cuentan).",
     "- risk_flags: caras_de_clientes (cualquier cara que no parezca del equipo), menores,",
     "  marca_ajena (logos de otras empresas), higiene (algo que se vea sucio o fuera de norma),",
-    "  imagen_generada_o_de_banco (si parece IA o foto de stock y no sacada en la cocina),",
+    input.archivo
+      ? "  imagen_generada_o_de_banco (SOLO si es claramente IA o de stock ajena a la marca: que se vea profesional, con fondo" +
+        " de estudio o iluminación cuidada es lo esperable en el archivo y NO cuenta),"
+      : "  imagen_generada_o_de_banco (si parece IA o foto de stock y no sacada en la cocina),",
     "  baja_calidad, texto_ilegible.",
     "- missing_context: qué le faltó decir al empleado para poder usarla bien (vacío si nada).",
     "- editing_notes: sugerencias concretas de recorte o edición.",
