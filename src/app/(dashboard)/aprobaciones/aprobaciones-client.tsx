@@ -2,7 +2,7 @@
 
 import { explicarError } from "@/lib/ui-errors"
 
-import { useEffect, useState, useTransition } from "react"
+import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { aprobarPost, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
 import { Button } from "@/components/ui/button"
@@ -79,56 +79,29 @@ function frameFor(p: PostItem, w: number | null, h: number | null): { ratio: num
 }
 
 /**
- * Video de la vista previa con botón de sonido bien visible. Arranca silenciado porque el
- * navegador no deja reproducir con audio solo; un toque lo activa (y vuelve a empezar).
+ * Video de la vista previa. Arranca silenciado (el navegador no deja reproducir con audio
+ * solo); el sonido se activa desde la fila «Sonido original» de Música, sin tapar la pieza.
  */
-function VideoConSonido({ src, className }: { src: string; className?: string }) {
-  const [muted, setMuted] = useState(true)
-  return (
-    <>
-      <video
-        src={src}
-        className={className}
-        muted={muted}
-        playsInline
-        autoPlay
-        loop
-        ref={(v) => {
-          if (v) v.muted = muted
-        }}
-      />
-      <button
-        type="button"
-        onClick={(e) => {
-          const v = e.currentTarget.previousElementSibling as HTMLVideoElement | null
-          const next = !muted
-          setMuted(next)
-          if (v) {
-            v.muted = next
-            if (!next) {
-              v.currentTime = 0
-              void v.play()
-            }
-          }
-        }}
-        aria-label={muted ? "Activar sonido" : "Silenciar"}
-        className="absolute bottom-[18%] right-3 z-40 flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur hover:bg-black/85"
-      >
-        {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-        {muted ? "Activar sonido" : "Con sonido"}
-      </button>
-    </>
-  )
+function VideoConSonido({ src, className, sonido }: { src: string; className?: string; sonido: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    v.muted = !sonido
+    if (sonido) {
+      v.currentTime = 0
+      void v.play().catch(() => {})
+    }
+  }, [sonido])
+  return <video ref={ref} src={src} className={className} muted playsInline autoPlay loop />
 }
 
-function Media({ g, p, ratio, fill }: { g: Grupo; p: PostItem; ratio: number; fill: boolean }) {
+function Media({ g, p, ratio, fill, sonido }: { g: Grupo; p: PostItem; ratio: number; fill: boolean; sonido: boolean }) {
   // La pieza final que armó el worker: es exactamente lo que se publica.
   if (p.renderUrl) {
     // Un reel armado con una foto es video aunque el original sea foto.
     return /\.mp4(\?|$)/.test(p.renderUrl) ? (
-      <div className="relative">
-        <VideoConSonido src={p.renderUrl} className="block w-full" />
-      </div>
+      <VideoConSonido src={p.renderUrl} className="block w-full" sonido={sonido} />
     ) : (
       // eslint-disable-next-line @next/next/no-img-element
       <img src={p.renderUrl} alt="" className="block w-full" />
@@ -141,7 +114,7 @@ function Media({ g, p, ratio, fill }: { g: Grupo; p: PostItem; ratio: number; fi
   return (
     <div className={cn("relative w-full overflow-hidden", g.isVideo && fill ? "bg-black" : "bg-neutral-100")} style={{ aspectRatio: ratio }}>
       {g.isVideo ? (
-        <VideoConSonido src={g.mediaUrl} className={fg} />
+        <VideoConSonido src={g.mediaUrl} className={fg} sonido={sonido} />
       ) : (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -165,14 +138,14 @@ function Avatar({ g, size = 30 }: { g: Grupo; size?: number }) {
   )
 }
 
-function Preview({ g, p, caption, hashtags }: { g: Grupo; p: PostItem; caption: string; hashtags: string }) {
+function Preview({ g, p, caption, hashtags, sonido }: { g: Grupo; p: PostItem; caption: string; hashtags: string; sonido: boolean }) {
   const { ratio, fill } = frameFor(p, g.width, g.height)
   const handle = p.accountName.replace(/^@/, "")
 
   if (p.postType === "story") {
     return (
       <div className="relative overflow-hidden rounded-[22px] bg-black">
-        <Media g={g} p={p} ratio={9 / 16} fill={fill} />
+        <Media g={g} p={p} ratio={9 / 16} fill={fill} sonido={sonido} />
         <div className="absolute inset-x-3 top-2 h-0.5 rounded bg-white/60" />
         <div className="absolute left-3 top-4 flex items-center gap-2 text-xs font-semibold text-white drop-shadow">
           <Avatar g={g} size={26} /> {handle} <span className="font-normal opacity-80">ahora</span>
@@ -195,7 +168,7 @@ function Preview({ g, p, caption, hashtags }: { g: Grupo; p: PostItem; caption: 
           {caption}
           {hashtags && <span className="text-[#385898]">{`\n\n${hashtags}`}</span>}
         </p>
-        <Media g={g} p={p} ratio={ratio} fill={fill} />
+        <Media g={g} p={p} ratio={ratio} fill={fill} sonido={sonido} />
         <div className="flex justify-around border-t py-2 text-[12px] font-semibold text-neutral-500">
           <span className="flex items-center gap-1"><ThumbsUp className="h-3.5 w-3.5" />Me gusta</span>
           <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />Comentar</span>
@@ -213,7 +186,7 @@ function Preview({ g, p, caption, hashtags }: { g: Grupo; p: PostItem; caption: 
         </div>
         <p className="font-semibold">{handle}</p>
       </div>
-      <Media g={g} p={p} ratio={ratio} fill={fill} />
+      <Media g={g} p={p} ratio={ratio} fill={fill} sonido={sonido} />
       <div className="flex items-center gap-3.5 px-3 pb-1 pt-2.5">
         <Heart className="h-5 w-5" /><MessageCircle className="h-5 w-5" /><Send className="h-5 w-5" /><Bookmark className="ml-auto h-5 w-5" />
       </div>
@@ -235,6 +208,8 @@ function toLocalInput(d: Date) {
 function GrupoCard({ g }: { g: Grupo }) {
   const router = useRouter()
   const [active, setActive] = useState(g.posts[0]?.id)
+  // Sonido de la vista previa (se activa desde la fila «Sonido original» de Música).
+  const [sonido, setSonido] = useState(false)
   const [resuelto, setResuelto] = useState<Record<string, "aprobado" | "rechazado">>({})
   const [textos, setTextos] = useState(() =>
     Object.fromEntries(
@@ -264,6 +239,8 @@ function GrupoCard({ g }: { g: Grupo }) {
     return tx.caption !== x.caption || tx.hashtags !== x.hashtags || tx.overlay !== x.overlayText || tx.template !== x.template || tx.music !== x.musicKey || tx.position !== x.position
   }
   const editado = changed(p)
+  // La vista previa es video (el original, o la pieza armada: un reel de foto también es video).
+  const esVideo = p.renderUrl ? /\.mp4(\?|$)/.test(p.renderUrl) : g.isVideo
   const set = (patch: Partial<(typeof textos)[string]>) => setTextos((s) => ({ ...s, [p.id]: { ...s[p.id], ...patch } }))
 
   // Guarda y pide al worker la pieza nueva; la vista previa se actualiza sola en unos segundos.
@@ -322,7 +299,7 @@ function GrupoCard({ g }: { g: Grupo }) {
         {/* Celular con la vista previa */}
         <div className="border-b bg-muted/40 p-4 lg:border-b-0 lg:border-r">
           <div className="mx-auto max-w-[300px] rounded-[30px] bg-neutral-900 p-2 shadow-lg">
-            <Preview g={g} p={p} caption={t.caption} hashtags={t.hashtags} />
+            <Preview g={g} p={p} caption={t.caption} hashtags={t.hashtags} sonido={sonido} />
           </div>
           <p className="mt-3 text-center text-[11px] text-muted-foreground">
             {p.renderUrl && !editado ? "Así va a salir (pieza final)" : editado ? "Tocá «Ver cómo queda» para actualizar" : "Vista aproximada: armando la pieza final…"}
@@ -446,6 +423,22 @@ function GrupoCard({ g }: { g: Grupo }) {
                         <input type="radio" name={`music-${p.id}`} checked={t.music === m.key} disabled={!!resuelto[p.id]} onChange={() => set({ music: m.key })} />
                         <span className="flex-1 truncate font-medium capitalize">{m.name}</span>
                         {m.url && <audio src={m.url} controls preload="none" className="h-7 w-40" />}
+                        {!m.url && esVideo && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              setSonido((x) => !x)
+                            }}
+                            className={cn(
+                              "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold",
+                              sonido ? "border-primary bg-primary text-white" : "bg-background hover:bg-muted",
+                            )}
+                          >
+                            {sonido ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                            {sonido ? "Sonando en la vista previa" : "Escuchar la vista previa"}
+                          </button>
+                        )}
                       </label>
                     ))}
                   </div>
