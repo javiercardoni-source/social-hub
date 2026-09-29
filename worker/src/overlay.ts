@@ -118,8 +118,10 @@ async function logoData(file: string) {
 
 async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El> {
   if (kit.logo) {
-    const w = kit.logo.round ? size : size * 1.9
-    const h = kit.logo.round ? size : w / kit.logo.aspect
+    // Redondo: un círculo de `size`. Alargado (ancho ≥ 2 veces el alto): ancho 1,9×size.
+    // Casi cuadrado (ej. mascota + nombre): alto = size, para que no tape media foto.
+    const h = kit.logo.round ? size : kit.logo.aspect >= 2 ? (size * 1.9) / kit.logo.aspect : size
+    const w = kit.logo.round ? size : h * kit.logo.aspect
     return el("img", { width: w, height: h, borderRadius: kit.logo.round ? size / 2 : 0, boxShadow: "0 4px 18px rgba(0,0,0,0.35)" }, undefined, {
       src: logoSrc ?? (await logoData(kit.logo.file)),
       width: w,
