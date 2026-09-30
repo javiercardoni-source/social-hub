@@ -176,14 +176,14 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
       const z = t.movimiento === "alejar" ? `(1.18-0.18*${k})` : `(1+0.18*${k})`
       await ff(["-ss", String(t.trim_start), "-t", String(d), "-i", f.archivo, "-an", "-vf",
         `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},scale=w='${W}*${z}':h='${H}*${z}':eval=frame,crop=${W}:${H}:x='(iw-${W})*${t.foco_x}':y='(ih-${H})*${t.foco_y}',fps=30,format=yuv420p,setsar=1`,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", out])
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
     } else {
       // Foto: Ken Burns. Con eval=frame hay que dar w Y h (h=-2 rompe el crop al arrancar).
       const z = t.movimiento === "acercar" ? `(1+0.22*${k})` : t.movimiento === "alejar" ? `(1.22-0.22*${k})` : "1.12"
       const px = t.movimiento === "paneo_derecha" ? k : t.movimiento === "paneo_izquierda" ? `(1-${k})` : String(t.foco_x)
       await ff(["-loop", "1", "-t", String(d), "-i", f.archivo, "-vf",
         `scale=1350:2400:force_original_aspect_ratio=increase,fps=30,scale=w='iw*${z}':h='ih*${z}':eval=frame,crop=${W}:${H}:x='(iw-${W})*${px}':y='(ih-${H})*${t.foco_y}',format=yuv420p,setsar=1`,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", out])
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
     }
   }
   // 2) Textos y cierre.
@@ -233,13 +233,18 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
     filtro += `;[${idx}:a]atrim=0:${lt.total.toFixed(2)},afade=t=out:st=${Math.max(0, lt.total - 1.5).toFixed(2)}:d=1.5,volume=0.85[a]`
   }
   const salida = join(dir, "reel.mp4")
+  // Memoria acotada: el worker tiene 768 MB y 1 CPU. Con 8 entradas 1080×1920, decodificadores con
+  // hilos por cuadro y x264 "medium" (lookahead de 40 cuadros) ffmpeg murió por memoria (30-09).
+  // Un hilo por decodificador y por filtro, y lookahead corto.
   await ff([
-    ...partes.flatMap((x) => ["-i", x.f]),
+    ...partes.flatMap((x) => ["-threads", "1", "-i", x.f]),
     ...extra,
+    "-filter_threads", "1",
+    "-filter_complex_threads", "1",
     "-filter_complex", filtro,
     "-map", "[v]",
     ...(opts.musica ? ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"] : []),
-    "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-movflags", "+faststart",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-threads", "2", "-x264-params", "rc-lookahead=10", "-movflags", "+faststart",
     "-t", lt.total.toFixed(2),
     salida,
   ])
