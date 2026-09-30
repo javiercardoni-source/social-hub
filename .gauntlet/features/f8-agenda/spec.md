@@ -4,7 +4,7 @@
 > horarios nos conviene publicar, y que un agente analice feriados y clima y lo cuadre todo con
 > fechas y horarios en base a las métricas de Meta".
 > Plan armado con Fable el 29-09; decisiones cerradas por Javier el 30-09.
-> **Estado: EN PAUSA** — Javier va a sumar más cosas antes de arrancar.
+> **Estado: CONSTRUIDA Y EN PRODUCCIÓN (30-09-2026, migración 0020).** Decisión final del aviso de lluvia: sale todos los días de lluvia; sol/frío/calor solo si cambió. Horarios: leídos de las webs por la IA y confirmados (editables en Marca → Agenda).
 
 ## Qué hay hoy (base)
 - `shared/cos/timing.ts` (F1): modelo día×hora con contracción bayesiana, sugiere 3 franjas en
