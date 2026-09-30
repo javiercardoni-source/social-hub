@@ -556,6 +556,8 @@ export async function planearSemana(opts: {
   clima: { dia: string; tarde: string | null; noche: string | null }[]
   fechas: { dia: string; nombre: string; tipo: string }[]
   apertura: unknown
+  /** Qué hacer esta semana según el motor de gustos (F7 M3): la agenda decide cuándo. */
+  sugerencias?: string[]
 }): Promise<z.infer<typeof PlanSemana>> {
   const texto = [
     `Sos el estratega de la agenda de publicaciones de ${opts.brand.name}. El motor ya ubicó cada pieza en el mejor horario según las métricas.`,
@@ -571,6 +573,7 @@ export async function planearSemana(opts: {
     `Clima de los próximos días (tarde / noche): ${opts.clima.map((c) => `${c.dia}: ${c.tarde ?? "?"} / ${c.noche ?? "?"}`).join("; ")}`,
     `Fechas: ${opts.fechas.length ? opts.fechas.map((f) => `${f.dia} ${f.nombre} (${f.tipo})`).join("; ") : "ninguna"}`,
     `Horarios de apertura: ${opts.apertura ? JSON.stringify(opts.apertura) : "sin confirmar"}`,
+    opts.sugerencias?.length ? `Lo que el motor de gustos sugiere hacer esta semana (mencionalo en la nota si ayuda a ubicar las piezas): ${opts.sugerencias.join("; ")}` : "",
   ].join("\n")
   const response = await anthropic().messages.parse({
     model: opts.model,
@@ -614,5 +617,43 @@ export async function leerHorarios(opts: { db: SupabaseClient; model: string; ma
   })
   await logUsage(opts.db, { purpose: "brand:hours", model: opts.model, usage: response.usage })
   if (!response.parsed_output) throw new Error(`la IA no devolvió horarios (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}
+
+// ── F7 M3 · Sugerencias de la semana ────────────────────────────────────────
+
+export const SugerenciasSemana = z.object({
+  resumen: z.string().describe("Dos o tres líneas: qué le está gustando al público esta semana (solo con los datos que te pasé)"),
+  contenido: z
+    .array(z.object({ titulo: z.string().describe("Pieza concreta, ej: '2 reels del armado con vapor, de cerca'"), por_que: z.string().describe("El dato que lo respalda, con la cifra tal cual te la pasé") }))
+    .describe("3 a 5 piezas concretas para hacer esta semana"),
+  material: z.array(z.object({ toma: z.string().describe("Toma para pedirle a la cocina, ej: '10 s del armado de onigiri con vapor, de cerca'"), por_que: z.string() })).describe("Qué filmar/fotografiar (3 a 5)"),
+  musica: z.array(z.string()).describe("Qué música bajar o dejar de usar (0 a 3 líneas), solo si los datos lo muestran"),
+})
+
+/**
+ * Redacta las sugerencias a partir de la tabla de efectos (la IA redacta, no calcula). El que llama
+ * valida que no haya cifras inventadas.
+ */
+export async function escribirSugerencias(opts: { db: SupabaseClient; model: string; brand: BrandContext; datos: string; pedido?: string }): Promise<z.infer<typeof SugerenciasSemana>> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 6000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content:
+          "Sos el estratega de contenido de la marca. Con lo que aprendió el motor de gustos (abajo), proponé qué hacer esta semana. " +
+          "Reglas: usá SOLO las cifras que aparecen abajo, tal cual (no calcules ni redondees otras); si un efecto dice 'poca data', no lo uses como argumento; " +
+          "respetá la voz y las reglas de la marca; nada de promos ni precios que no estén en Datos vigentes.\n\n" +
+          opts.datos +
+          (opts.pedido ? `\n\n${opts.pedido}` : ""),
+      },
+    ],
+    output_config: { format: zodOutputFormat(SugerenciasSemana) },
+  })
+  await logUsage(opts.db, { purpose: "taste:suggest", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió sugerencias (stop: ${response.stop_reason})`)
   return response.parsed_output
 }

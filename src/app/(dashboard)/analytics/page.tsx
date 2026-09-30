@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { explorationHint, lifts, liftText, suggestSlots, type Format } from "../../../../shared/cos/timing"
 import { ExternalLink } from "lucide-react"
+import { MetricasTabs } from "./tabs"
 
 export const dynamic = "force-dynamic"
 
@@ -169,6 +170,7 @@ export default async function MetricasPage() {
     <>
       <PageHeader title="Métricas" description={`${brand ? brand.name : "Todas las marcas"} · lo que funciona y cuándo publicar`} />
       <div className="space-y-6 p-4 md:p-6">
+        <MetricasTabs activa="metricas" />
         {/* KPIs */}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {[

@@ -205,6 +205,11 @@ function agendaClock() {
   if (horaBA === 5) {
     void pedir("agenda:context", {}, `agenda:context:${dia}`)
     void pedir("agenda:learn", {}, `agenda:learn:${dia}`)
+    void pedir("taste:learn", {}, `taste:learn:${dia}`)
+  }
+  // Sugerencias de la semana (F7 M3): los lunes a las 6, después de aprender. El job es idempotente por semana.
+  if (horaBA === 6 && new Date(ahora - 3 * 3600_000).getUTCDay() === 1) {
+    void pedir("taste:suggest", {}, `taste:suggest:${dia}`)
   }
 }
 // Al arrancar: contexto y modelo si nunca se hicieron (una sola vez por día).

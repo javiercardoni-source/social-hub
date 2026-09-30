@@ -27,6 +27,8 @@ export type PostItem = {
   qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   suggestions: { at: string; label: string; lift: string; up: boolean; confianza: string }[]
   template: string
+  /** Por qué el motor de gustos eligió este tema (F7 M2). */
+  musicaPorque: string | null
   /** Horario elegido por la agenda (F8). null = sin agenda (se elige al aprobar). */
   motor: { at: string; porque: string; prueba: boolean; fijo: boolean } | null
   /** Reel armado por el motor desde un guion (F9). null = pieza con plantilla. */
@@ -478,6 +480,7 @@ function GrupoCard({ g }: { g: Grupo }) {
             ) : (
               <div className="space-y-1.5 pt-1">
                 <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Música</label>
+                {p.musicaPorque && t.music === p.musicKey && <p className="text-xs">{p.musicaPorque}</p>}
                 {g.music.length === 0 ? (
                   <p className="text-xs text-muted-foreground">Esta marca todavía no tiene biblioteca de música.</p>
                 ) : (

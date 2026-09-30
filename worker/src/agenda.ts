@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job } from "./queue.ts"
 import type { Handler } from "./handlers.ts"
 import { brandContext, listMusic, placaDeMarca, settings } from "./handlers.ts"
+import { elegirImagen, elegirMusica } from "./eleccion.ts"
 import { planearSemana, writeClimaPhrase, leerHorarios } from "./ai.ts"
 import { arDay, insertMissing } from "./context.ts"
 import { defaultTemplate } from "./overlay.ts"
@@ -308,6 +309,7 @@ const planearAgenda: Handler = async (job, { db, log }) => {
           clima: resumenClima(clima),
           fechas: await proximasFechas(db, b.id),
           apertura: reglas.apertura,
+          sugerencias: await sugerenciasDeLaSemana(db, b.id),
         })
         const v = validarPropuesta(r.cambios, plan, piezas, ocupados, reglas)
         plan = v.plan
@@ -349,6 +351,13 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     }
     log("agenda planeada", { brand: b.slug, piezas: piezas.length, cambios, sinLugar: base.sinLugar.length, agente })
   }
+}
+
+/** Lo que el motor de gustos (F7 M3) sugiere hacer esta semana: un solo plan, gustos dice qué y la agenda cuándo. */
+async function sugerenciasDeLaSemana(db: SupabaseClient, brandId: string): Promise<string[]> {
+  const { data } = await db.from("cos_suggestions").select("items_json").eq("brand_id", brandId).eq("kind", "contenido").order("week", { ascending: false }).limit(1)
+  const items = (data?.[0]?.items_json as { items?: { titulo: string }[] } | undefined)?.items ?? []
+  return items.map((i) => i.titulo).slice(0, 5)
 }
 
 function resumenClima(clima: Map<string, ClimaCat>): { dia: string; tarde: ClimaCat | null; noche: ClimaCat | null }[] {
@@ -446,12 +455,14 @@ const historiasClima: Handler = async (_job, { db, queue, log }) => {
         log("historia de clima: la IA no escribió, va el texto de respaldo", { error: String(e) })
         return respaldo
       })
-      const version = await fondoHistoria(db, queue, b)
+      const version = await fondoHistoria(db, queue, b, campaign)
       if (!version) {
         log("historia de clima: la placa de fondo se está preparando, sigue en la próxima vuelta", { brand: b.slug })
         continue
       }
       const music = await listMusic(db, b.slug)
+      // Clima = campaña: el motor de gustos elige lo que mejor viene rindiendo, sin probar.
+      const tema = music.length ? await elegirMusica(db, { brandId: b.id, format: "story", disponibles: music, semilla: campaign, campania: true }) : null
       const plantilla = defaultTemplate(b.slug)
       const { data: post, error } = await db
         .from("cos_posts")
@@ -464,7 +475,8 @@ const historiasClima: Handler = async (_job, { db, queue, log }) => {
           hashtags: "",
           overlay_text: frase.slice(0, 80),
           template: ["firma", "none"].includes(plantilla) ? "etiqueta" : plantilla,
-          music_key: music.length ? music[Math.floor(Math.random() * music.length)] : null,
+          music_key: tema?.key ?? null,
+          pick_json: tema?.pick ?? null,
           campaign,
           uses_weather: true,
           scheduled_at: at.toISOString(),
@@ -493,10 +505,10 @@ const historiasClima: Handler = async (_job, { db, queue, log }) => {
 const prevDia = (dia: string) => new Date(Date.parse(`${dia}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10)
 
 /** Fondo de una historia del sistema: la mejor foto de la marca que no se usó hace poco, o la placa. */
-async function fondoHistoria(db: SupabaseClient, queue: Parameters<Handler>[1]["queue"], b: { id: string; slug: string }): Promise<string | null> {
+async function fondoHistoria(db: SupabaseClient, queue: Parameters<Handler>[1]["queue"], b: { id: string; slug: string }, semilla: string): Promise<string | null> {
   const { data: fotos } = await db
     .from("cos_assets")
-    .select("id, status, current_version_id")
+    .select("id, status, current_version_id, traits, quality_score")
     .eq("brand_id", b.id)
     .eq("media_type", "photo")
     .in("status", ["READY", "IN_USE"])
@@ -508,7 +520,15 @@ async function fondoHistoria(db: SupabaseClient, queue: Parameters<Handler>[1]["
     .order("quality_score", { ascending: false })
     .limit(10)
   const lista = (fotos ?? []).filter((f) => f.current_version_id)
-  if (lista.length) return lista[Math.floor(Math.random() * Math.min(5, lista.length))].current_version_id
+  // F7 M2: por rasgos si el motor de gustos está habilitado para historias; si no, una de las 5 mejores
+  // (estable por campaña: un reintento no cambia el fondo).
+  const porGusto = await elegirImagen(db, { brandId: b.id, format: "story", fotos: lista.map((f) => ({ version: f.current_version_id!, traits: f.traits, quality: f.quality_score })), semilla, campania: true })
+  if (porGusto) return porGusto.version
+  if (lista.length) {
+    let h = 0
+    for (const ch of semilla) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+    return lista[h % Math.min(5, lista.length)].current_version_id
+  }
   return placaDeMarca(db, queue, b)
 }
 

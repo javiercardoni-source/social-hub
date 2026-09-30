@@ -65,3 +65,23 @@ Críticos: datos/aprobación, dominio/integración, UX (subagentes independiente
 - **48 · Defensivo (arreglado):** los updates del plan filtran también por marca.
 - **49 · FALSO POSITIVO / a propósito:** «post en PUBLISHING queda trabado por el re-sellado» (el guardián no compara el sello al pasar a PUBLISHED); «filas repetidas en cos_slot_models» (es una foto por corrida, se lee la última); «rechazados no cuentan en la regla del clima» (regla vigente; las historias de clima sí cuentan las rechazadas para no repetir); «se habla de ventana en la pantalla» (no aparece).
 - **Real, verificado en producción (solo lectura):** Open-Meteo archivo y pronóstico por hora OK; motor con el historial real elige franjas coherentes; lectura de horarios de las 3 webs: Sensaciones todos los días 16:30-22:30, Bijutsukan lun-sáb, FasutoFudo mar-sáb.
+
+## F7 M1 (el motor aprende + pestaña Gustos) y M2 (el motor elige) — 30-09-2026
+Críticos M1: dominio/datos y UX. Sin P0/P1 reales abiertos. (Check de M2 con Fable: queda para cuando Javier cambie de modelo; se corrió un crítico independiente.)
+- **50 · Backtest (propio, verificado con datos reales):** la primera versión comparaba mal (el modelo partía del promedio, que se corre por los virales, y sumaba efectos no claros). Ahora los dos parten de la mediana del entrenamiento y el modelo usa solo efectos claros, como el motor. Resultado real: gana SOLO en reels de Sensaciones (−7 % de error, 43 casos) → M2 elige imágenes solo ahí; música en todas.
+- **51 · P2 UX (arreglado):** nombres de rasgos cortados en celular, textos de 10 px, aviso «va junto con» poco visible, punto gris con poco contraste.
+- **52 · FALSO POSITIVO:** «el color es la única señal» (los porcentajes llevan +/−); «simulados entrenan al motor» (nunca llegan a cos_media; igual se filtran); «cos_taste_models sin upsert» (una foto por día a propósito).
+- **53 · Aceptado y documentado:** posts de más de 120 días usan su último valor (no 48 h): escala levemente distinta, afecta a la normalización, no al orden.
+
+## F7 M2 (el motor elige) — 30-09-2026
+Crítico independiente: auditoría sin escribir código. Sin P0. Tests PASS (264 tests, 25 archivos).
+- **54 · P1 (performance) — ARREGLADO:** temasParaReel llama a candidatosMusica 2 veces (línea 66 + 68 de eleccion.ts), en lugar de 1. Impacto bajo: solo redo de reels (no frecuente) y candidatosMusica es rápida. Sugerencia: retornar candidatos desde elegirMusica o cachear.
+- **55 · P2 (fragilidad) — ARREGLADO:** pick_json.final no se setea en post:draft (handlers.ts:364), solo en redo de reels (línea 519). La check en Aprobaciones (página.tsx:173) depende del fallback a elegido. Funciona hoy; es frágil si cambia la estructura de pick_json. Impacto: cosmético (no muestra "🎵 elegida por el motor" si falla). Sugerencia: setear final en post:draft también.
+- **56 · P2 (inconsistencia):** fondoHistoria (agenda.ts:519-527) usa hash custom para elegir foto cuando elegirImagen retorna null (sin backtest). Otros lugares usan elegir() de pick.ts. Es determinístico y estable; redundancia solo de patrones. Impacto: ninguno operativo.
+- **OK:** Nunca elige música de otra marca · temas sin ficha neutrales · sin modelo = neutral · imágenes solo donde backtest gana · override registrado · preferencia acotada ±15% · semillas estables (draft:asset, reel:origen, redo:job:post, campaign) · idempotencia post:draft · redo no repite · hash intacto (music_key sí, music_track_id no).
+
+## F7 M3 (sugerencias y candidatos a pautar) — 30-09-2026
+Crítico independiente (dominio + UX): PASS, sin P0/P1. Confirmado: ninguna llamada a la API de Ads.
+- **57 · P2 aceptado:** precios escritos como «$31,9k» no se reconocen como precio (el caption así no se descarta). Poco frecuente; queda anotado.
+- **58 · P3 aceptado:** el validador de cifras no detecta «el doble» escrito en palabras (sí «200 %»).
+- **59 · P3:** listas con sangría en celular algo apretadas.

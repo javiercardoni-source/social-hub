@@ -34,7 +34,7 @@ const IG_METRICS: Record<Format, string> = {
   feed: "reach,views,likes,comments,saved,shares,total_interactions,follows,profile_visits",
   carousel: "reach,views,likes,comments,saved,shares,total_interactions,follows,profile_visits",
   video: "reach,views,likes,comments,saved,shares,total_interactions",
-  reel: "reach,views,likes,comments,saved,shares,total_interactions,ig_reels_avg_watch_time",
+  reel: "reach,views,likes,comments,saved,shares,total_interactions,ig_reels_avg_watch_time,ig_reels_video_view_total_time",
   story: "reach,views,shares,total_interactions,follows,profile_visits,replies,navigation",
 }
 
@@ -297,12 +297,14 @@ async function measure(acc: Account, token: string, remoteId: string, format: Fo
       data.total_interactions = data.likes + data.comments + data.shares
       // Vistas: no todas las publicaciones las tienen; si falla, se sigue sin ellas.
       const ins = await graphGet<{ data: { name: string; values?: { value?: number }[] }[] }>(`${remoteId}/insights`, token, {
-        metric: "post_media_view,post_total_media_view_unique",
+        metric: "post_media_view,post_total_media_view_unique,post_clicks",
       }).catch(() => null)
       for (const d of ins?.data ?? []) {
         const v = d.values?.[0]?.value
         // Meta a veces devuelve alcance 0 con vistas reales: un 0 así no se guarda como alcance.
-        if (typeof v === "number" && (d.name === "post_media_view" || v > 0)) data[d.name === "post_media_view" ? "views" : "reach"] = v
+        if (typeof v !== "number") continue
+        if (d.name === "post_clicks") data.clicks = v
+        else if (d.name === "post_media_view" || v > 0) data[d.name === "post_media_view" ? "views" : "reach"] = v
       }
       return { ok: true, data }
     } catch (e) {

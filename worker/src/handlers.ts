@@ -53,6 +53,9 @@ import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Piez
 import { TRAITS_VERSION, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
 import { gustosHandlers } from "./gustos.ts"
 import { agendaHandlers } from "./agenda.ts"
+import { tasteHandlers } from "./taste.ts"
+import { sugerenciasHandlers } from "./sugerencias.ts"
+import { elegirImagen, elegirMusica, temasParaReel } from "./eleccion.ts"
 import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
 import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
 
@@ -354,8 +357,10 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
   const template = defaultTemplate(brandSlug)
   // Foto + biblioteca de música de la marca → todo sale con música: en Instagram va como reel
   // (que también aparece en el feed) en vez de post de foto, porque Meta no deja música en fotos.
+  // F7 M2: la música la elige el motor de gustos (antes, al azar). Semilla = el asset (reintento = misma).
   const music = await listMusic(db, brandSlug)
-  const pick = music.length ? music[Math.floor(Math.random() * music.length)] : null
+  const eleccion = music.length ? await elegirMusica(db, { brandId: a.brand_id, format: "reel", disponibles: music, semilla: `draft:${a.id}` }) : null
+  const pick = eleccion?.key ?? null
   const withMusic = !isVideo && !!pick
   const formats: { account: string; platform: string; post_type: PostType; caption: string; hashtags: string }[] = []
   if (ig) {
@@ -386,6 +391,7 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
           // Si la plantilla de la marca no lleva texto (firma), la historia del clima usa etiqueta.
           template: f.post_type === "story" && overlayClima && ["firma", "none"].includes(template) ? "etiqueta" : template,
           music_key: withMusic && !(f.platform === "instagram" && f.post_type === "feed") ? pick : null,
+          pick_json: withMusic && !(f.platform === "instagram" && f.post_type === "feed") && eleccion ? { ...eleccion.pick, final: eleccion.key } : null,
           uses_weather: c.usa_clima || (f.post_type === "story" && !!overlayClima),
           status: "DRAFT",
         })
@@ -445,8 +451,10 @@ async function borradoresReel(
   const brand = await brandContext(db, o.brandId)
   const { data: b } = await db.from("cos_brands").select("datos_vigentes").eq("id", o.brandId).single()
   const datos = normalizarDatos(b?.datos_vigentes)
+  // F7 M2 + F9 §6: el motor de gustos propone 3 temas (el elegido primero) y la IA del guion elige entre ellos.
   const musicKeys = await listMusic(db, brand.slug)
-  const temas = musicKeys.map((k) => k.split("/").pop()!)
+  const propuestos = await temasParaReel(db, { brandId: o.brandId, disponibles: musicKeys, semilla: `reel:${o.origen}` })
+  const temas = (propuestos.keys.length ? propuestos.keys : musicKeys).map((k) => k.split("/").pop()!)
   const { guion, respaldo } = await planearReel({
     db,
     model: s.ai_model,
@@ -512,6 +520,7 @@ async function borradoresReel(
           overlay_text: (story && ganchoClima ? ganchoClima : gancho).slice(0, 80),
           template: "none",
           music_key: musicKey,
+          pick_json: propuestos.pick ? { ...propuestos.pick, final: musicKey, porque: musicKey === propuestos.pick.elegido ? propuestos.pick.porque : `🎵 ${guion.musica?.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ") ?? ""} · elegida por el guion entre las 3 que propuso el motor` } : null,
           montaje,
           uses_weather: c.usa_clima || (story && !!ganchoClima),
           status: "DRAFT",
@@ -921,10 +930,9 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     const { data: bd } = await db.from("cos_brands").select("datos_vigentes").eq("id", first.brand_id).single()
     const datos = normalizarDatos(bd?.datos_vigentes)
     const musicKeys = await listMusic(db, brand.slug)
-    const temas = musicKeys.map((k) => k.split("/").pop()!)
-    const actual = reelPrev.music_key?.split("/").pop() ?? null
-    // "Otra música": la IA elige entre los temas que no son el actual.
-    const temasPedido = otraMusica && temas.length > 1 ? temas.filter((t) => t !== actual) : temas
+    // "Otra música": el motor propone 3 que no son el actual y la IA elige entre ellos.
+    const propuestosRedo = await temasParaReel(db, { brandId: first.brand_id, disponibles: musicKeys, semilla: `redo:${job.id}`, excluir: otraMusica && reelPrev.music_key ? [reelPrev.music_key] : [] })
+    const temasPedido = (propuestosRedo.keys.length ? propuestosRedo.keys : musicKeys).map((k) => k.split("/").pop()!)
     const { guion, respaldo } = await planearReel({
       db,
       model: s.ai_model,
@@ -1003,16 +1011,19 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
   const music = otraMusica ? await listMusic(db, brand.slug) : []
 
   for (const p of posts) {
-    const nextMusic =
+    // "Otra música": la siguiente que elige el motor de gustos, distinta de la actual.
+    const otra =
       otraMusica && p.music_key && music.length > 1
-        ? music.filter((m) => m !== p.music_key)[Math.floor(Math.random() * (music.length - 1))]
-        : p.music_key
+        ? await elegirMusica(db, { brandId: p.brand_id, format: p.post_type, disponibles: music, semilla: `redo:${job.id}:${p.id}`, excluir: [p.music_key] })
+        : null
+    const nextMusic = otra?.key ?? p.music_key
     await setPost(db, p.id, {
       caption: p.post_type === "story" ? "" : caption,
       hashtags: p.post_type === "story" ? "" : hashtags,
       overlay_text: overlay,
       template: otroDiseno ? nextTemplate(p.template) : p.template,
       music_key: nextMusic,
+      ...(otra ? { pick_json: otra.pick } : {}),
       render_key: null,
       // Contenido nuevo: la posición se vuelve a decidir con la revisión visual.
       overlay_layout: null,
@@ -1146,7 +1157,7 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
         // Fondo: la mejor foto sin usar de la marca (sin caras bloqueadas); si no hay, la placa.
         const { data: fotos } = await db
           .from("cos_assets")
-          .select("id, status, current_version_id")
+          .select("id, status, current_version_id, traits, quality_score")
           .eq("brand_id", b.id)
           .eq("media_type", "photo")
           .in("status", ["READY", "IN_USE"])
@@ -1158,7 +1169,10 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
           .order("status", { ascending: false }) // READY (sin usar) antes que IN_USE
           .order("quality_score", { ascending: false })
           .limit(30)
-        const foto = (fotos ?? []).find((f) => f.current_version_id && !usadas.has(f.id))
+        const libres = (fotos ?? []).filter((f) => f.current_version_id && !usadas.has(f.id))
+        // F7 M2: si el motor de gustos está habilitado para historias (backtest), elige la foto por rasgos.
+        const porGusto = await elegirImagen(db, { brandId: b.id, format: "story", fotos: libres.map((f) => ({ version: f.current_version_id!, traits: f.traits, quality: f.quality_score })), semilla: campaign, campania: true })
+        const foto = porGusto ? libres.find((f) => f.current_version_id === porGusto.version) : libres[0]
         const version = foto?.current_version_id ?? (await placaDeMarca(db, queue, b))
         if (!version) {
           log("historia de feriado: la placa de fondo se está preparando, sigue en la próxima vuelta", { brand: b.slug, day: d.day })
@@ -1172,6 +1186,8 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
           return respaldo
         })
         const plantilla = defaultTemplate(b.slug)
+        // Feriado = campaña: el motor de gustos elige lo que mejor viene rindiendo, sin probar.
+        const tema = music.length ? await elegirMusica(db, { brandId: b.id, format: "story", disponibles: music, semilla: campaign, campania: true }) : null
         const { data: post, error } = await db
           .from("cos_posts")
           .insert({
@@ -1184,7 +1200,8 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
             overlay_text: frase,
             // Tiene que verse el texto: si la marca usa solo firma, va etiqueta.
             template: ["firma", "none"].includes(plantilla) ? "etiqueta" : plantilla,
-            music_key: music.length ? music[Math.floor(Math.random() * music.length)] : null,
+            music_key: tema?.key ?? null,
+            pick_json: tema?.pick ?? null,
             campaign,
             scheduled_at: horaBA(diasAntesDe(d.day, h.diasAntes), h.hora),
             // F8: el día es fijo; con la agenda prendida, el motor elige la hora dentro del día.
@@ -1728,4 +1745,6 @@ export const handlers: Record<string, Handler> = {
   ...gustosHandlers,
   "reel:build": buildReel,
   ...agendaHandlers,
+  ...tasteHandlers,
+  ...sugerenciasHandlers,
 }

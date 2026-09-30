@@ -91,7 +91,7 @@ export async function editarPost(
   if (!TEMPLATES.includes(template)) throw aviso("Plantilla inválida")
   if (!["auto", "top", "bottom"].includes(position)) throw aviso("Posición inválida")
   const db = createAdminClient()
-  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, montaje, cos_brands(slug)").eq("id", postId).single()
+  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, montaje, pick_json, cos_brands(slug)").eq("id", postId).single()
   // Reel del motor (F9): el texto es el gancho (mayúsculas) y no hay plantilla ni posición.
   if (before?.montaje) {
     overlay = overlay.toUpperCase().slice(0, 40)
@@ -115,6 +115,10 @@ export async function editarPost(
       template,
       music_key: music,
       overlay_position: position,
+      // F7 M2: si Javier cambia la música que eligió el motor, queda registrado (señal de gusto de marca).
+      ...(before?.pick_json && (before.music_key ?? null) !== music
+        ? { pick_json: { ...(before.pick_json as Record<string, unknown>), override: { motor: before.music_key, javier: music, at: new Date().toISOString() } } }
+        : {}),
       // La pieza vieja ya no corresponde: el worker arma la nueva y la vuelve a revisar.
       // Si Javier eligió posición a mano, esa es la posición; en "auto" la decide la revisión.
       ...(visualChanged ? { render_key: null, render_qa: null, overlay_layout: position === "auto" ? null : position } : {}),

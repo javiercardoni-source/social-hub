@@ -33,6 +33,7 @@ type RawPost = {
   schedule_source: string | null
   schedule_reason: string | null
   schedule_lock: boolean
+  pick_json: { porque?: string; elegido?: string; final?: string; override?: unknown } | null
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -70,7 +71,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock, pick_json,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -169,6 +170,8 @@ export default async function AprobacionesPage() {
         confianza: x.confianza,
       })),
       template: p.template,
+      // Por qué este tema (F7 M2), mientras siga siendo el que eligió el motor.
+      musicaPorque: p.pick_json?.porque && !p.pick_json.override && [p.pick_json.final, p.pick_json.elegido].includes(p.music_key ?? "") ? p.pick_json.porque : null,
       // Horario que eligió la agenda (F8): se aprueba con su ventana.
       motor:
         p.scheduled_at && p.window_start && !p.schedule_lock && ["motor", "exploracion", "fijo"].includes(p.schedule_source ?? "")
