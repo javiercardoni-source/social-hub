@@ -223,3 +223,26 @@ export async function renderOverlay(opts: {
   const svg = await satori(body as never, { width: W, height: H, fonts })
   return Buffer.from(new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng())
 }
+
+/**
+ * El kit de la marca listo para otros motores (reels): tipografías (propias si se cargaron),
+ * colores, logo y si va sin firma. Sale de KITS + lo cargado en Marca → Motores.
+ */
+export async function kitDeMarca(brand: string, custom?: CustomKit) {
+  const k = KITS[brand]
+  if (!k) return null
+  return {
+    titulo: { name: custom?.title?.name ?? k.font.name, data: custom?.title?.data ?? (await font(k.font.file)), weight: custom?.title ? 400 : k.font.weight },
+    texto: { name: custom?.text?.name ?? k.small.name, data: custom?.text?.data ?? (await font(k.small.file)), weight: custom?.text ? 400 : k.small.weight },
+    mayusculas: k.uppercase,
+    colorTexto: k.text,
+    etiqueta: k.label,
+    logo: custom?.logo
+      ? { src: `data:image/png;base64,${custom.logo.data.toString("base64")}`, aspect: custom.logo.aspect }
+      : k.logo
+        ? { src: await logoData(k.logo.file), aspect: k.logo.aspect }
+        : null,
+    nombre: k.wordmark ?? null,
+  }
+}
+export type KitMarca = NonNullable<Awaited<ReturnType<typeof kitDeMarca>>>
