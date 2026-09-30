@@ -101,3 +101,22 @@ export function lunesDe(at: Date): string {
   t.setUTCDate(t.getUTCDate() - ((dow + 6) % 7))
   return t.toISOString().slice(0, 10)
 }
+
+/** Rasgo en palabras (para la IA y para Javier): "luz cálida", "plano cenital (desde arriba)". */
+const RASGO_TEXTO: Record<string, Record<string, string>> = {
+  plano: { primer_plano: "primer plano", cenital: "plano cenital (desde arriba)", medio: "plano medio", ambiente: "plano de ambiente" },
+  protagonista: { producto: "el producto de protagonista", manos_proceso: "manos / proceso", persona: "personas", local: "el local", placa: "placas gráficas" },
+  accion: { vapor: "con vapor", corte: "con corte", armado: "armado", salsa: "salsa cayendo", servido: "emplatado/servido", nada: "producto quieto" },
+  luz_temp: { calida: "luz cálida", fria: "luz fría" },
+  luz_nivel: { clara: "luz clara", oscura: "luz oscura" },
+  fondo: { limpio: "fondo limpio", cargado: "fondo cargado" },
+  genero: {},
+  plantilla: { banda: "plantilla banda", etiqueta: "plantilla etiqueta", firma: "solo firma", none: "sin plantilla" },
+  frase: { con_frase: "con frase sobre la imagen", sin_frase: "sin frase sobre la imagen" },
+  musica: { con_musica: "con música", sin_musica: "sin música" },
+  clima: { lluvia: "días de lluvia", tormenta: "días de tormenta", frio: "días de frío", calor: "días de calor", soleado: "días soleados", nublado: "días nublados" },
+  feriado: { si: "feriados" },
+}
+export function rasgoEnPalabras(campo: string, valor: string): string {
+  return RASGO_TEXTO[campo]?.[valor] ?? (campo === "genero" ? `música ${valor}` : `${campo.replace(/_/g, " ")}: ${valor.replace(/_/g, " ")}`)
+}

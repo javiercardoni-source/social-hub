@@ -7,7 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Handler } from "./handlers.ts"
 import { brandContext, settings } from "./handlers.ts"
 import { escribirSugerencias } from "./ai.ts"
-import { candidatosPauta, lunesDe, numerosInventados } from "../../shared/cos/sugerencias.ts"
+import { candidatosPauta, lunesDe, numerosInventados, rasgoEnPalabras } from "../../shared/cos/sugerencias.ts"
 import { liftsPorMetrica, type EfectoRasgo } from "../../shared/cos/taste.ts"
 import { normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
 import { normalizarRasgos, RASGO_CAMPOS } from "../../shared/cos/gustos.ts"
@@ -63,7 +63,7 @@ const sugerir: Handler = async (job, { db, log }) => {
     const permitidos: number[] = []
     for (const [f, m] of modelos) {
       const claros = m.model_json.efectos.filter((e) => e.claro)
-      lineas.push(`${f} (${m.n} publicaciones): ${claros.length ? claros.map((e) => `${e.campo}=${e.valor} ${pct(e.efecto) > 0 ? "+" : ""}${pct(e.efecto)} % (${e.n} posts)`).join("; ") : "todavía poca data, ningún rasgo claro"}`)
+      lineas.push(`${f} (${m.n} publicaciones): ${claros.length ? claros.map((e) => `${rasgoEnPalabras(e.campo, e.valor)} ${pct(e.efecto) > 0 ? "+" : ""}${pct(e.efecto)} % (${e.n} publicaciones)`).join("; ") : "todavía poca data, ningún rasgo claro"}`)
       permitidos.push(m.n, ...claros.flatMap((e) => [Math.abs(pct(e.efecto)), e.n]))
       const temas = [...m.model_json.temas].filter((t) => t.activo).sort((a, b2) => b2.efecto - a.efecto)
       if (temas.length) {
@@ -76,7 +76,8 @@ const sugerir: Handler = async (job, { db, log }) => {
       continue
     }
     const brand = await brandContext(db, b.id)
-    const texto = `LO QUE APRENDIÓ EL MOTOR (rendimiento vs lo de siempre, descontando el horario):\n${lineas.join("\n")}`
+    const FORMATO: Record<string, string> = { feed: "Posts", reel: "Reels", story: "Historias", carousel: "Carruseles", video: "Videos" }
+    const texto = `LO QUE APRENDIÓ EL MOTOR (rendimiento vs lo de siempre, descontando el horario). Escribí en palabras simples, sin códigos:\n${lineas.map((l) => l.replace(/^(\w+) \(/, (_, f: string) => `${FORMATO[f] ?? f} (`)).join("\n")}`
     let sug = await escribirSugerencias({ db, model: s.ai_model, brand, datos: texto }).catch((e) => (log("sugerencias: la IA falló", { brand: b.slug, error: String(e) }), null))
     const inventados = (x: NonNullable<typeof sug>) => numerosInventados([x.resumen, ...x.contenido.flatMap((c) => [c.titulo, c.por_que]), ...x.material.flatMap((m) => [m.toma, m.por_que]), ...x.musica].join(" "), permitidos)
     if (sug && inventados(sug).length) {
