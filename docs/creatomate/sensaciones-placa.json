@@ -6,7 +6,7 @@
     {
       "name": "Foto",
       "type": "image",
-      "source": "https://cdn.creatomate.com/demo/better-sushi.jpg",
+      "source": "",
       "fit": "cover"
     },
     {
