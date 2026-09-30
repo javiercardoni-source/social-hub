@@ -1,6 +1,7 @@
 "use server"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
+import { primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -173,17 +174,37 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
   if (!pieza?.render_qa) throw aviso("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
   // "Ya" (o una fecha que está encima) se deja 2 min adelante para que el reloj no lo dé
   // por vencido mientras se aprueba; igual se encola ya mismo (abajo).
-  const publishNow = !target || target.getTime() <= Date.now() + 2 * 60_000
+  const pedido = target && target.getTime() > Date.now() + 2 * 60_000 ? target : new Date(Date.now() + 2 * 60_000)
+  // Freno anti-ráfaga: la misma cuenta no publica dos piezas más cerca de lo que pide la agenda.
+  const { data: yo } = await db.from("cos_posts").select("account_id, post_type").eq("id", postId).single()
+  const desde = new Date(pedido.getTime() - 24 * 3600_000).toISOString()
+  const { data: otros } = await db
+    .from("cos_posts")
+    .select("post_type, scheduled_at, published_at")
+    .eq("account_id", yo?.account_id ?? "")
+    .neq("id", postId)
+    .in("status", ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "RETRY_SCHEDULED"])
+    .or(`scheduled_at.gte.${desde},published_at.gte.${desde}`)
+  const ocupados = (otros ?? [])
+    .map((o) => ({ account: yo?.account_id ?? "", format: o.post_type as Formato, at: (o.published_at ?? o.scheduled_at) as string }))
+    .filter((o) => !!o.at)
+  const hueco = primerHuecoManual({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, pedido, ocupados)
+  const publishNow = !hueco.corrido && (!target || target.getTime() <= Date.now() + 2 * 60_000)
+  const horaFinal = hueco.at
   // Hora elegida a mano: queda fijada (🔒) y sin ventana; la agenda no la mueve.
   const { error: fe } = await db
     .from("cos_posts")
     .update({
-      scheduled_at: publishNow ? new Date(Date.now() + 2 * 60_000).toISOString() : target!.toISOString(),
+      scheduled_at: horaFinal.toISOString(),
       schedule_lock: true,
       schedule_source: "manual",
       window_start: null,
       window_end: null,
-      schedule_reason: publishNow ? "Apenas se aprobó" : "Horario elegido a mano",
+      schedule_reason: hueco.corrido
+        ? `Se corrió a las ${horaFinal.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })} para no salir pegado a otra pieza de la cuenta`
+        : publishNow
+          ? "Apenas se aprobó"
+          : "Horario elegido a mano",
     })
     .eq("id", postId)
     .eq("status", "PENDING_APPROVAL")
@@ -203,6 +224,7 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
+  return { corrido: hueco.corrido, at: horaFinal.toISOString() }
 }
 
 /** PENDING_APPROVAL → APPROVED (la base sella el hash) → SCHEDULED (el worker lo publica en su hora). */

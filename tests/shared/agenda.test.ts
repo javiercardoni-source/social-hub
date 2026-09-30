@@ -12,6 +12,7 @@ import {
   normalizarApertura,
   pct,
   primerTurno,
+  primerHuecoManual,
   validarPropuesta,
   type Apertura,
   type ModeloAgenda,
@@ -287,5 +288,36 @@ describe("exploración con pooling", () => {
     const piezas = Array.from({ length: 60 }, (_, i) => ({ id: `b${i}`, account: `c${i}`, format: "reel" as const }))
     const n = asignar(piezas, m, [], reglas({ explorarCada: 6 })).asignadas.filter((a) => a.fuente === "exploracion").length
     expect(n).toBeGreaterThan(4)
+  })
+})
+
+describe("primerHuecoManual (freno anti-ráfaga de lo aprobado a mano)", () => {
+  const T = Date.parse("2026-10-01T19:00:00Z")
+  const at = (min: number) => new Date(T + min * 60_000).toISOString()
+  it("sin nada cerca, sale a la hora pedida", () => {
+    const r = primerHuecoManual({ account: "a", format: "feed" }, new Date(T), [{ account: "a", format: "story", at: at(0) }, { account: "b", format: "feed", at: at(0) }])
+    expect(r).toEqual({ at: new Date(T), corrido: false })
+  })
+  it("feed y reel comparten la separación de 4 h", () => {
+    const r = primerHuecoManual({ account: "a", format: "reel" }, new Date(T), [{ account: "a", format: "feed", at: at(-30) }])
+    expect(r.corrido).toBe(true)
+    expect(r.at.getTime()).toBe(T + 210 * 60_000)
+  })
+  it("nueve aprobadas de golpe quedan escalonadas", () => {
+    const ocupados: { account: string; format: "feed" | "story"; at: string }[] = []
+    const salidas: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const r = primerHuecoManual({ account: "a", format: "story" }, new Date(T), ocupados)
+      ocupados.push({ account: "a", format: "story", at: r.at.toISOString() })
+      salidas.push((r.at.getTime() - T) / 60_000)
+    }
+    expect(salidas).toEqual([0, 90, 180])
+  })
+  it("salta varios choques seguidos", () => {
+    const r = primerHuecoManual({ account: "a", format: "story" }, new Date(T), [
+      { account: "a", format: "story", at: at(10) },
+      { account: "a", format: "story", at: at(100) },
+    ])
+    expect((r.at.getTime() - T) / 60_000).toBe(190)
   })
 })

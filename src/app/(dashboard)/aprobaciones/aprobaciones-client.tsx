@@ -243,6 +243,8 @@ function GrupoCard({ g }: { g: Grupo }) {
   const [cuando, setCuando] = useState<"motor" | "ya" | "programar">(inicial.cuando)
   const [fecha, setFecha] = useState(inicial.fecha)
   const [error, setError] = useState<string | null>(null)
+  // Piezas que el freno anti-ráfaga corrió de hora (para no salir pegadas a otra de la cuenta).
+  const [corridos, setCorridos] = useState<string[]>([])
   const [pending, start] = useTransition()
   const [rehacer, setRehacer] = useState<{ open: boolean; pedido: string; diseno: boolean; musica: boolean; trabajando: boolean }>({
     open: false,
@@ -297,7 +299,8 @@ function GrupoCard({ g }: { g: Grupo }) {
       const tx = textos[id]
       const orig = g.posts.find((x) => x.id === id)!
       if (changed(orig)) await editarPost(id, tx.caption, tx.hashtags, tx.overlay, tx.template, tx.music, tx.position)
-      await aprobarPost(id, scheduled(), orig.motor?.at)
+      const r = await aprobarPost(id, scheduled(), orig.motor?.at)
+      if (r?.corrido) setCorridos((c) => [...c, `${label(orig)} → ${new Date(r.at).toLocaleString("es-AR", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`])
       setResuelto((r) => ({ ...r, [id]: "aprobado" }))
     }
     const next = g.posts.find((x) => !ids.includes(x.id) && !resuelto[x.id])
@@ -309,7 +312,14 @@ function GrupoCard({ g }: { g: Grupo }) {
     return (
       <Card className="flex items-center gap-2 p-4 text-sm text-emerald-700">
         <CheckCircle className="h-4 w-4" />
-        {n ? `${n} aprobada${n > 1 ? "s" : ""}: ${cuando === "ya" ? "salen en uno o dos minutos" : cuando === "motor" ? "salen en el horario de la agenda" : "quedan programadas"}. Seguilas en Calendario.` : "Rechazado."}
+        <span>
+          {n ? `${n} aprobada${n > 1 ? "s" : ""}: ${cuando === "ya" ? "salen en uno o dos minutos" : cuando === "motor" ? "salen en el horario de la agenda" : "quedan programadas"}. Seguilas en Calendario.` : "Rechazado."}
+          {corridos.length > 0 && (
+            <span className="mt-1 block text-amber-700">
+              Para no publicar todo junto se corrieron: {corridos.join(" · ")}.
+            </span>
+          )}
+        </span>
       </Card>
     )
   }

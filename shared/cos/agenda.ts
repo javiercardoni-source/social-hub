@@ -248,6 +248,29 @@ export function cabe(p: Pieza, at: Date, ocupados: Ocupado[], r: Reglas): string
   return null
 }
 
+/**
+ * Freno anti-ráfaga para lo que se aprueba A MANO ("apenas apruebe" u otra hora): la hora la elige
+ * Javier, pero dos piezas de la misma cuenta no salen más cerca que lo que pide la agenda
+ * (4 h entre feed/reels, 90 min entre historias). Si choca, se corre al primer hueco hacia adelante.
+ * No mira apertura ni horario: eso es decisión de quien la fijó. (30-09-2026: se aprobaron 9 piezas
+ * de FasutoFudo con la agenda apagada y salieron las 9 en un minuto.)
+ */
+export function primerHuecoManual(p: { account: string; format: Formato }, deseado: Date, ocupados: Ocupado[]): { at: Date; corrido: boolean } {
+  const sep = LIMITES[tipo(p.format)].separacionMin * 60_000
+  const mismos = ocupados
+    .filter((o) => o.account === p.account && tipo(o.format) === tipo(p.format))
+    .map((o) => Date.parse(o.at))
+    .sort((a, b) => a - b)
+  let t = deseado.getTime()
+  // Cada choque empuja a "la otra + separación"; como la lista está ordenada, alcanza con barrerla.
+  for (let vuelta = 0; vuelta < 2 * mismos.length + 1; vuelta++) {
+    const choque = mismos.find((o) => Math.abs(o - t) < sep)
+    if (choque == null) break
+    t = choque + sep
+  }
+  return { at: new Date(t), corrido: t !== deseado.getTime() }
+}
+
 /** Semilla estable por pieza (para que la exploración no cambie en cada corrida). */
 function semilla(id: string): number {
   let h = 2166136261
