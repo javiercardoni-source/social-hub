@@ -6,9 +6,10 @@ import { AlertTriangle, CheckCircle, Circle, Loader2, Play, Plus, RefreshCw, Tra
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { createClient } from "@/lib/supabase/client"
-import { borrarMotor, borrarMusica, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
+import { borrarMotor, borrarMusica, etiquetarTema, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
 import { explicarError } from "@/lib/ui-errors"
 import { validarArchivo, type KindMotor } from "../../../../shared/cos/motores"
+import { GENEROS, GENERO_LABEL, MOODS, MOOD_LABEL, type EtiquetasTema, type Genero, type Mood } from "../../../../shared/cos/gustos"
 
 export type Ficha = {
   resumen?: string
@@ -25,7 +26,9 @@ export type Ficha = {
   medidas?: { duracion_s: number; cortes: number; toma_promedio_s: number } | null
 }
 export type Insumo = { id: string; kind: KindMotor; name: string; url: string | null; mime: string; note: string | null; status: string; analysis: Ficha | null; error: string | null }
-export type Tema = { key: string; name: string; url: string | null }
+/** Ficha de un tema (F7): lo medido por el worker + lo marcado a mano. */
+export type FichaTema = EtiquetasTema & { id: string; duracion: number | null; bpm: number | null; energia: number | null; estado: "midiendo" | "lista" | "error" }
+export type Tema = { key: string; name: string; url: string | null; ficha: FichaTema | null }
 
 const ACEPTA: Record<KindMotor, string> = {
   referencia: "video/mp4,video/quicktime,image/jpeg,image/png,image/webp",
@@ -316,7 +319,7 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
   const titulo = insumos.find((i) => i.kind === "fuente_titulo")
   const texto = insumos.find((i) => i.kind === "fuente_texto")
   const logo = insumos.find((i) => i.kind === "logo")
-  const analizando = refs.some((r) => r.status === "analizando")
+  const analizando = refs.some((r) => r.status === "analizando") || musica.some((m) => !m.ficha || m.ficha.estado === "midiendo")
   const run = (fn: () => Promise<unknown>) =>
     start(async () => {
       try {
@@ -401,25 +404,28 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
         <Seccion
           n={5}
           titulo="Biblioteca de sonido"
-          ayuda="Los temas de esta marca (MP3, M4A, WAV). La IA elige de acá la música de reels e historias. Con licencia de uso libre (ej. Pixabay)."
+          ayuda="Los temas de esta marca (MP3, M4A, WAV). De acá sale la música de reels e historias. Con licencia de uso libre (ej. Pixabay). Duración, BPM y energía se miden solos; marcá género, mood y voz con los chips: con eso el motor aprende qué música le gusta a tu público."
           listo={musica.length > 0}
         >
           <Subir kind="musica" etiqueta="Subir temas" multiple onDone={setMsg} />
           {musica.length > 0 && (
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-2">
               {musica.map((m) => (
-                <div key={m.key} className="flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs">
-                  <span className="flex-1 truncate font-medium capitalize">{m.name}</span>
-                  {m.url && <audio src={m.url} controls preload="none" className="h-7 w-40 sm:w-56" />}
-                  <button
-                    type="button"
-                    aria-label={`Sacar ${m.name}`}
-                    disabled={pending}
-                    className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                    onClick={() => confirm(`¿Sacar «${m.name}» de la biblioteca?`) && run(() => borrarMusica(m.key))}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                <div key={m.key} className="rounded-lg border bg-background px-2.5 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate font-medium capitalize">{m.name}</span>
+                    {m.url && <audio src={m.url} controls preload="none" className="h-8 w-full sm:w-56" />}
+                    <button
+                      type="button"
+                      aria-label={`Sacar ${m.name}`}
+                      disabled={pending}
+                      className="ml-auto rounded p-2 text-muted-foreground hover:bg-muted hover:text-destructive sm:ml-0"
+                      onClick={() => confirm(`¿Sacar «${m.name}» de la biblioteca?`) && run(() => borrarMusica(m.key))}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <FichaDeTema ficha={m.ficha} onMsg={setMsg} />
                 </div>
               ))}
             </div>
@@ -430,12 +436,92 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
   )
 }
 
-/** Mientras la IA analiza referencias, la pantalla se actualiza sola cada 10 s. */
+/**
+ * Mientras la IA analiza referencias o el worker mide temas, la pantalla se actualiza sola cada
+ * 10 s. Como mucho 10 minutos: si algo quedó trabado, no refresca para siempre (se ve al recargar).
+ */
 function AutoRefresco() {
   const router = useRouter()
   useEffect(() => {
-    const t = setInterval(() => router.refresh(), 10_000)
+    const desde = Date.now()
+    const t = setInterval(() => {
+      if (Date.now() - desde > 10 * 60_000) return clearInterval(t)
+      router.refresh()
+    }, 10_000)
     return () => clearInterval(t)
   }, [router])
   return null
+}
+
+/** "2:34" */
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`
+
+/**
+ * Ficha de un tema: lo medido (duración, BPM, energía) y los chips para marcar a mano género
+ * (uno), mood (varios) y voz. Cada toque se guarda solo.
+ */
+function FichaDeTema({ ficha, onMsg }: { ficha: FichaTema | null; onMsg: (m: string) => void }) {
+  const [et, setEt] = useState<EtiquetasTema | null>(ficha ? { genre: ficha.genre, mood: ficha.mood, vocals: ficha.vocals } : null)
+  const [pending, start] = useTransition()
+  if (!ficha || !et) return <p className="mt-1.5 text-muted-foreground">Registrando el tema…</p>
+
+  const guardar = (nuevo: EtiquetasTema) => {
+    const antes = et
+    setEt(nuevo)
+    start(async () => {
+      try {
+        setEt(await etiquetarTema(ficha.id, nuevo))
+      } catch (e) {
+        setEt(antes)
+        onMsg(explicarError(e))
+      }
+    })
+  }
+  const medidas =
+    ficha.estado === "midiendo"
+      ? "Midiendo duración, BPM y energía…"
+      : ficha.estado === "error"
+        ? "No se pudo medir este tema"
+        : [ficha.duracion != null ? mmss(ficha.duracion) : null, ficha.bpm != null ? `${ficha.bpm} BPM` : "BPM sin pulso claro", ficha.energia != null ? `energía ${Math.round(ficha.energia * 100)} %` : null]
+            .filter(Boolean)
+            .join(" · ")
+
+  const chip = (activo: boolean, label: string, onClick: () => void, key: string) => (
+    <button
+      key={key}
+      type="button"
+      aria-pressed={activo}
+      disabled={pending}
+      onClick={onClick}
+      className={`min-h-8 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${activo ? "border-primary bg-primary text-primary-foreground" : "bg-background hover:bg-muted"}`}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      <p className={`tabular-nums ${ficha.estado === "error" ? "text-amber-700" : "text-muted-foreground"}`}>{medidas}</p>
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+        <span className="w-16 shrink-0 pt-1.5 font-semibold text-muted-foreground">Género</span>
+        <div className="flex flex-wrap gap-1.5">
+          {GENEROS.map((g: Genero) => chip(et.genre === g, GENERO_LABEL[g], () => guardar({ ...et, genre: et.genre === g ? null : g }), g))}
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+        <span className="w-16 shrink-0 pt-1.5 font-semibold text-muted-foreground">Mood</span>
+        <div className="flex flex-wrap gap-1.5">
+          {MOODS.map((m: Mood) =>
+            chip(et.mood.includes(m), MOOD_LABEL[m], () => guardar({ ...et, mood: et.mood.includes(m) ? et.mood.filter((x) => x !== m) : [...et.mood, m] }), m),
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+        <span className="w-16 shrink-0 pt-1.5 font-semibold text-muted-foreground">Voz</span>
+        <div className="flex flex-wrap gap-1.5">
+          {chip(et.vocals === true, "Con voz", () => guardar({ ...et, vocals: et.vocals === true ? null : true }), "voz")}
+          {chip(et.vocals === false, "Instrumental", () => guardar({ ...et, vocals: et.vocals === false ? null : false }), "inst")}
+        </div>
+      </div>
+    </div>
+  )
 }

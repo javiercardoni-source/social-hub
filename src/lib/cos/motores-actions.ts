@@ -7,6 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { requireMember } from "@/lib/cos/auth"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { KINDS, extDe, validarArchivo, type KindMotor } from "../../../shared/cos/motores"
+import { esRutaDeMusica, normalizarEtiquetas, tituloTema } from "../../../shared/cos/gustos"
 
 /**
  * Marca → Motores: lo que cada marca le da a los motores visuales (referencias de estilo,
@@ -70,6 +71,15 @@ export async function registrarMotor(input: { kind: KindMotor; key: string; name
   if (!input.key.startsWith(`${carpeta(input.kind, brand.slug)}/`) || input.key.includes("..")) throw aviso("Subida inválida")
 
   if (input.kind === "musica") {
+    // Ficha del tema (F7): se registra ya y el worker mide duración, BPM y energía.
+    if (!esRutaDeMusica(input.key, brand.slug)) throw aviso("Subida inválida")
+    const { data: t, error } = await db
+      .from("cos_music_tracks")
+      .upsert({ brand_id: brand.id, storage_key: input.key, title: tituloTema(input.name), active: true, analyzed_at: null, analysis_error: null }, { onConflict: "storage_key" })
+      .select("id")
+      .single()
+    if (error || !t) throw aviso(`El tema se subió pero no se pudo registrar: ${error?.message}`)
+    await db.rpc("cos_enqueue_job", { p_type: "music:analyze", p_payload: { track_id: t.id }, p_run_at: new Date().toISOString(), p_dedupe_key: `music:analyze:${t.id}` })
     revalidatePath("/marca")
     return { rearmados: 0 }
   }
@@ -163,5 +173,23 @@ export async function borrarMusica(key: string) {
   if (count) throw aviso(`Ese tema lo usan ${count} publicaciones que todavía no salieron: cambiales la música o esperá a que se publiquen.`)
   const { error } = await db.storage.from("cos-media").remove([key])
   if (error) throw aviso(`No se pudo borrar: ${error.message}`)
+  // La ficha queda (los posts que lo usaron siguen enseñando al motor): solo sale de la biblioteca.
+  await db.from("cos_music_tracks").update({ active: false }).eq("storage_key", key)
   revalidatePath("/marca")
+}
+
+/** Chips de la ficha de un tema (género, mood, voz). Vocabulario cerrado: lo demás se descarta. */
+export async function etiquetarTema(trackId: string, etiquetas: { genre: string | null; mood: string[]; vocals: boolean | null }) {
+  const { brand, db } = await marcaActiva()
+  const e = normalizarEtiquetas(etiquetas)
+  const { data, error } = await db
+    .from("cos_music_tracks")
+    .update({ genre: e.genre, mood: e.mood, vocals: e.vocals })
+    .eq("id", trackId)
+    .eq("brand_id", brand.id)
+    .select("id")
+  if (error) throw aviso(`No se pudo guardar: ${error.message}`)
+  if (!data?.length) throw aviso("Ese tema no es de esta marca")
+  revalidatePath("/marca")
+  return e
 }

@@ -90,6 +90,24 @@ export function classifierPrompt(input: {
     "  baja_calidad, texto_ilegible.",
     "- missing_context: qué le faltó decir al empleado para poder usarla bien (vacío si nada).",
     "- editing_notes: sugerencias concretas de recorte o edición.",
+    RASGOS_CRITERIO,
+  ].join("\n")
+}
+
+// Rasgos visuales del motor de gustos (F7): los mismos criterios en la clasificación completa y
+// en la liviana del backfill, para que "cenital" signifique lo mismo en los dos.
+const RASGOS_CRITERIO = [
+  "- rasgos: cómo está hecha la imagen, eligiendo SIEMPRE de la lista (si dudás, la más cercana).",
+  "  En video, mirá el conjunto de fotogramas: el plano y la acción que más se repiten.",
+].join("\n")
+
+/** Prompt de la clasificación liviana: solo los rasgos visuales (backfill de F7). */
+export function rasgosPrompt(input: { mediaType: "photo" | "video"; frames: number }): string {
+  return [
+    "Sos el clasificador visual de Content OS (marcas de comida con delivery).",
+    input.mediaType === "video" ? `Es un VIDEO: te paso ${input.frames} fotogramas en orden.` : "Es una FOTO (puede ser la portada de un video o carrusel).",
+    "Describí solo cómo está hecha la imagen, con el vocabulario de cada campo.",
+    RASGOS_CRITERIO,
   ].join("\n")
 }
 

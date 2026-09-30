@@ -319,3 +319,18 @@ export async function grillaImagen(imgs: (Buffer | null)[], dir: string): Promis
   await run("ffmpeg", ["-y", "-framerate", "1", "-i", join(dir, "g%02d.jpg"), "-vf", `tile=3x${filas}:padding=6:color=white`, "-frames:v", "1", "-q:v", "3", out], { timeout: FF_TIMEOUT_MS })
   return readFile(out)
 }
+
+/**
+ * Audio mono en float a `sr` Hz (hasta `maxSeconds`), para el análisis de la ficha de un tema
+ * (BPM y energía: shared/cos/gustos.ts analizarAudio). 2 min a 11 kHz ≈ 5 MB.
+ */
+export async function decodeAudio(file: string, sr = 11025, maxSeconds = 120): Promise<Float32Array> {
+  const { stdout } = await run("ffmpeg", ["-v", "error", "-i", file, "-t", String(maxSeconds), "-ac", "1", "-ar", String(sr), "-f", "f32le", "pipe:1"], {
+    timeout: FF_TIMEOUT_MS,
+    maxBuffer: 64 * 1024 * 1024,
+    encoding: "buffer",
+  })
+  const buf = stdout as Buffer
+  // Copia alineada: el Buffer de Node puede no empezar en un múltiplo de 4.
+  return new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength - (buf.byteLength % 4)))
+}

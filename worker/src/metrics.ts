@@ -71,8 +71,21 @@ async function upsertMedia(db: SupabaseClient, acc: Account, rows: Record<string
   if (error) throw new Error(`cos_media: ${error.message}`)
 }
 
+/**
+ * URL fresca de la imagen de una publicación vieja (la que se guardó al listar ya venció, o nunca
+ * se guardó porque el histórico se recorrió antes de que hubiera miniaturas). Solo lectura.
+ */
+export async function freshThumbUrl(platform: string, remoteId: string, token: string): Promise<string | null> {
+  if (platform === "instagram") {
+    const m = await graphGet<{ media_url?: string; thumbnail_url?: string }>(remoteId, token, { fields: "media_url,thumbnail_url" })
+    return m.thumbnail_url ?? m.media_url ?? null
+  }
+  const p = await graphGet<{ full_picture?: string }>(remoteId, token, { fields: "full_picture" })
+  return p.full_picture ?? null
+}
+
 /** Miniatura propia (las URLs de Meta vencen): 320 px de ancho, JPEG. */
-async function saveThumb(db: SupabaseClient, key: string, url: string) {
+export async function saveThumb(db: SupabaseClient, key: string, url: string) {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`miniatura ${res.status}`)
   const buf = Buffer.from(await res.arrayBuffer())

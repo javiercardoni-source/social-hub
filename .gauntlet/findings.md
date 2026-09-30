@@ -31,3 +31,14 @@
 - **23 · P2 REAL (arreglado):** PNG con alto 0 daba aspect infinito → error claro.
 - **24 · FALSO POSITIVO:** "ventana de 20 h en UTC": es una duración, la zona horaria no influye.
 - **25 · Descartado:** caché de tipografías/logo sin límite (un archivo por subida, KB); carrera de dos tipografías simultáneas (el índice único la frena con mensaje); "rearmar contradice congelar lo aprobado" (solo toca PENDING_APPROVAL).
+
+## F7 Motor de gustos · M0 (fichas y registro) — 30-09-2026
+Críticos: Data, Integration, UX (subagentes independientes). Sin P0/P1 abiertos.
+- **26 · P1 REAL (arreglado, lo encontré antes de los críticos):** graphGet envuelve los errores permanentes de Meta en PermanentError; el backfill los trataba como error del trabajo → un post borrado en Meta mataba todo el backfill. Ahora `clasificarError`: token → frena; límite → pausa 30 min; error del elemento → se anota en traits_error y sigue.
+- **27 · P1 REAL (arreglado, UX):** si ffmpeg fallaba con un tema, music:analyze agotaba reintentos sin anotar nada → "midiendo" y auto-refresco para siempre. Ahora anota analysis_error y corta (PermanentError); el auto-refresco de Motores se apaga a los 10 min.
+- **28 · P2 REAL (arreglado):** el tope de gasto del backfill se chequeaba solo al armar la tanda (con costo estimado). Ahora también con el gasto real antes de cada elemento.
+- **29 · P3 (arreglado):** sceneCuts fallaba en silencio en classifyAsset → ahora queda en el log.
+- **30 · FALSO POSITIVO:** "loop sin escape" en media sin miniatura: cada tanda usa 10 llamadas nuevas a Meta en posts distintos; avanza de a 10.
+- **31 · FALSO POSITIVO:** "toques rápidos en chips se pisan": `disabled={pending}` bloquea el segundo toque.
+- **32 · FALSO POSITIVO:** "BPM sin pulso claro mientras mide": en estado midiendo se muestra "Midiendo…".
+- **33 · Descartado/P3:** carreras de upsert entre web/script/sync (dedupe por clave, sin IA); rasgos duplicados en ai_json (bytes); analysis_error no se reintenta solo (a propósito; re-subir lo resetea); pantalla larga con 20 temas (compactar en M1); storage_key sin constraint de inmutable (nadie lo actualiza).

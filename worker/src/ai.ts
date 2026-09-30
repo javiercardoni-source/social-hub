@@ -6,8 +6,24 @@ import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { z } from "zod"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, rasgosPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { RASGOS, costoUsd } from "../../shared/cos/gustos.ts"
 import { PermanentError } from "./queue.ts"
+
+/**
+ * Rasgos visuales del motor de gustos (F7), con vocabulario CERRADO: el schema obliga a la IA a
+ * elegir de shared/cos/gustos.ts. El ritmo y la duración de los videos no los dice la IA: los mide
+ * ffmpeg.
+ */
+export const RasgosIA = z.object({
+  plano: z.enum(RASGOS.plano).describe("primer_plano: el producto llena el cuadro · cenital: desde arriba · medio: producto con algo de contexto · ambiente: el lugar o la escena"),
+  protagonista: z.enum(RASGOS.protagonista).describe("Qué es lo principal: producto (el plato) · manos_proceso (manos cocinando o armando) · persona · local · placa (gráfica/texto)"),
+  accion: z.enum(RASGOS.accion).describe("Qué pasa: vapor · corte (cuchillo cortando) · armado · salsa (cayendo o sirviéndose) · servido (emplatado/entrega) · nada (quieto)"),
+  luz_temp: z.enum(RASGOS.luz_temp).describe("Temperatura de la luz: calida (amarillenta/anaranjada) o fria (blanca/azulada)"),
+  luz_nivel: z.enum(RASGOS.luz_nivel).describe("clara (luminosa) u oscura (baja luz, fondo oscuro)"),
+  fondo: z.enum(RASGOS.fondo).describe("limpio (liso o sin distracciones) o cargado (muchos objetos o texto)"),
+})
+export type RasgosIA = z.infer<typeof RasgosIA>
 
 export const Classification = z.object({
   summary: z.string(),
@@ -22,6 +38,7 @@ export const Classification = z.object({
   risk_flags: z.array(z.enum(RISK_FLAGS)),
   missing_context: z.string(),
   editing_notes: z.array(z.string()),
+  rasgos: RasgosIA,
 })
 export type Classification = z.infer<typeof Classification>
 
@@ -205,10 +222,11 @@ export async function reviewPiece(opts: { db: SupabaseClient; model: string; ima
 
 export async function logUsage(
   db: SupabaseClient,
-  x: { purpose: string; model: string; usage: Anthropic.Usage; assetId?: string; postId?: string },
+  x: { purpose: string; model: string; usage: Anthropic.Usage; assetId?: string; postId?: string; costUsd?: number },
 ) {
-  // El costo en dólares queda en null: los precios se cargan cuando se mida (PLAN §11).
+  // El costo en dólares queda en null salvo donde hace falta para un tope (traits:backfill).
   const { error } = await db.from("cos_ai_usage").insert({
+    cost_usd: x.costUsd ?? null,
     purpose: x.purpose,
     model: x.model,
     input_tokens: x.usage.input_tokens + (x.usage.cache_creation_input_tokens ?? 0),
@@ -374,4 +392,43 @@ export async function analyzeGrid(opts: {
   await logUsage(opts.db, { purpose: "feed:analyze", model: opts.model, usage: response.usage })
   if (!response.parsed_output) throw new Error(`la IA no devolvió el análisis (stop: ${response.stop_reason})`)
   return response.parsed_output
+}
+
+/**
+ * Solo los rasgos visuales (backfill de F7): modelo liviano, sin el contexto de la marca (los
+ * rasgos no dependen de la marca) y una sola imagen. Devuelve el costo para aplicar el tope.
+ */
+export async function classifyTraits(opts: {
+  db: SupabaseClient
+  model: string
+  frames: Buffer[]
+  mediaType: "photo" | "video"
+  assetId?: string
+}): Promise<{ rasgos: RasgosIA; costUsd: number }> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 1000,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...opts.frames.map((f) => ({
+            type: "image" as const,
+            source: { type: "base64" as const, media_type: "image/jpeg" as const, data: f.toString("base64") },
+          })),
+          { type: "text", text: rasgosPrompt({ mediaType: opts.mediaType, frames: opts.frames.length }) },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(RasgosIA) },
+  })
+  const u = response.usage
+  const costUsd = costoUsd(opts.model, {
+    input: u.input_tokens + (u.cache_creation_input_tokens ?? 0),
+    output: u.output_tokens,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+  })
+  await logUsage(opts.db, { purpose: "traits:backfill", model: opts.model, usage: u, assetId: opts.assetId, costUsd })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió rasgos válidos (stop: ${response.stop_reason})`)
+  return { rasgos: response.parsed_output, costUsd }
 }

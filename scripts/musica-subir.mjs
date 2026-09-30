@@ -28,9 +28,21 @@ for (const { slug } of brands ?? []) {
     if (!MIME[ext]) continue
     const name = clean(f)
     if (existentes.has(name)) continue
-    const { error } = await db.storage.from("cos-media").upload(`music/${slug}/${name}`, readFileSync(join(dir, f)), { contentType: MIME[ext] })
+    const key = `music/${slug}/${name}`
+    const { error } = await db.storage.from("cos-media").upload(key, readFileSync(join(dir, f)), { contentType: MIME[ext] })
     console.log(error ? `✗ ${slug}/${f}: ${error.message}` : `✓ ${slug}/${name}`)
-    if (!error) subidos++
+    if (error) continue
+    subidos++
+    // Ficha del tema (F7): se registra y el worker mide duración, BPM y energía.
+    const { data: brand } = await db.from("cos_brands").select("id").eq("slug", slug).single()
+    const title = name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "tema"
+    const { data: t, error: te } = await db
+      .from("cos_music_tracks")
+      .upsert({ brand_id: brand.id, storage_key: key, title, active: true, analyzed_at: null, analysis_error: null }, { onConflict: "storage_key" })
+      .select("id")
+      .single()
+    if (te) console.log(`  (no se pudo registrar la ficha: ${te.message}; la registra el worker en la próxima sincronización)`)
+    else await db.rpc("cos_enqueue_job", { p_type: "music:analyze", p_payload: { track_id: t.id }, p_dedupe_key: `music:analyze:${t.id}` })
   }
   const { data: total } = await db.storage.from("cos-media").list(`music/${slug}`, { limit: 100 })
   console.log(`  ${slug}: ${total?.length ?? 0} temas en la biblioteca`)

@@ -165,6 +165,27 @@ void scheduleContext()
 const contextClock = setInterval(() => void scheduleContext(), 30 * 60_000)
 shutdown.signal.addEventListener("abort", () => clearInterval(contextClock), { once: true })
 
+// Biblioteca de música (F7): el bucket ↔ cos_music_tracks, cada 6 horas (y al arrancar).
+// Las subidas desde la web ya registran el tema al momento; esto atrapa lo que suba el script.
+async function scheduleMusic() {
+  if (shutdown.signal.aborted) return
+  // La clave de la cola solo frena duplicados vivos: lo que frena es "ya corrió hace poco".
+  const { data } = await db
+    .from("cos_jobs")
+    .select("id")
+    .eq("type", "music:sync")
+    .eq("status", "done")
+    .gte("finished_at", new Date(Date.now() - 6 * 3600_000).toISOString())
+    .limit(1)
+  if (data?.length) return
+  await queue
+    .enqueue("music:sync", {}, { dedupeKey: `music:sync:${Math.floor(Date.now() / (6 * 3600_000))}` })
+    .catch((e) => log("no pude encolar la biblioteca de música", { error: String(e) }))
+}
+void scheduleMusic()
+const musicClock = setInterval(() => void scheduleMusic(), 30 * 60_000)
+shutdown.signal.addEventListener("abort", () => clearInterval(musicClock), { once: true })
+
 // Historias de Turnos "para redes" (F3): cada 3 minutos, solo si está configurado.
 import("./turnos.ts").then(({ turnosConfig }) => {
   if (!turnosConfig()) return log("Turnos no configurado (TURNOS_API_URL / CONTENT_OS_SECRET): historias apagadas")

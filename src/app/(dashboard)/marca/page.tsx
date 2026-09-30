@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/dashboard/page-header"
 import { BRAND_MODULES } from "../../../../shared/cos/brand-modules"
 import { normalizarDatos } from "../../../../shared/cos/datos-vigentes"
 import { signedUrls } from "@/lib/cos/storage"
+import { normalizarEtiquetas, tituloTema } from "../../../../shared/cos/gustos"
 import type { Insumo, Tema } from "./motores"
 import { MarcaClient, type ModuloEstado } from "./marca-client"
 
@@ -35,10 +36,16 @@ export default async function MarcaPage() {
   if (error) throw new Error(`No se pudo cargar la entrevista: ${error.message}`)
 
   // Motores visuales: referencias, tipografías, logo y biblioteca de sonido de la marca.
-  const [{ data: assets }, { data: temas }] = await Promise.all([
+  const [{ data: assets }, { data: temas }, { data: fichas }] = await Promise.all([
     db.from("cos_brand_assets").select("id, kind, name, storage_key, mime, note, status, analysis, error").eq("brand_id", brand.id).order("created_at", { ascending: false }),
     db.storage.from("cos-media").list(`music/${brand.slug}`, { limit: 200 }),
+    db
+      .from("cos_music_tracks")
+      .select("id, storage_key, title, duration_s, bpm, energy, genre, mood, vocals, analyzed_at, analysis_error")
+      .eq("brand_id", brand.id)
+      .eq("active", true),
   ])
+  const fichaDe = new Map((fichas ?? []).map((f) => [f.storage_key as string, f]))
   const musicaKeys = (temas ?? []).filter((t) => /\.(mp3|m4a|wav|aac)$/i.test(t.name)).map((t) => `music/${brand.slug}/${t.name}`)
   const urls = await signedUrls([...(assets ?? []).filter((a) => a.kind === "referencia").map((a) => a.storage_key), ...musicaKeys])
   const insumos: Insumo[] = (assets ?? []).map((a) => ({
@@ -52,11 +59,25 @@ export default async function MarcaPage() {
     analysis: a.analysis,
     error: a.error,
   }))
-  const musica: Tema[] = musicaKeys.map((k) => ({
-    key: k,
-    name: k.split("/").pop()!.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").replace(/\s+[0-9a-f]{6}$/i, ""),
-    url: urls[k] ?? null,
-  }))
+  const musica: Tema[] = musicaKeys.map((k) => {
+    const f = fichaDe.get(k)
+    return {
+      key: k,
+      name: f?.title ?? tituloTema(k),
+      url: urls[k] ?? null,
+      // Sin fila todavía = la subió el script y el worker la registra en la próxima sincronización.
+      ficha: f
+        ? {
+            id: f.id,
+            duracion: f.duration_s != null ? Number(f.duration_s) : null,
+            bpm: f.bpm != null ? Number(f.bpm) : null,
+            energia: f.energy != null ? Number(f.energy) : null,
+            estado: f.analysis_error ? "error" : f.analyzed_at ? "lista" : "midiendo",
+            ...normalizarEtiquetas(f),
+          }
+        : null,
+    }
+  })
 
   const modulos: ModuloEstado[] = BRAND_MODULES.map((m) => {
     const r = rows?.find((x) => x.module === m.id)

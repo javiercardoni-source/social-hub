@@ -13,6 +13,7 @@
  *   post:reconcile  un post que quedó "publicando" cuando el worker se cayó
  *   metrics:sync    trae lo publicado y mide cada post según su edad (F1 analytics)
  *   accounts:check  prueba el token de cada cuenta y la marca conectada o con error
+ *   music:* / traits:backfill  fichas del motor de gustos (F7), en gustos.ts
  *
  * Un manejador tira PermanentError si reintentar no sirve; cualquier otro error vuelve
  * a la cola con espera creciente (la calcula la base).
@@ -48,6 +49,8 @@ import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
 import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
+import { TRAITS_VERSION, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
+import { gustosHandlers } from "./gustos.ts"
 
 export type HandlerContext = {
   db: SupabaseClient
@@ -218,9 +221,15 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
   // Todo lo que no llega de la cocina en el momento (carpetas, Instagram, base de fotos en Drive).
   const archivo = ["archivo", "instagram", "drive"].includes(extra?.source ?? "")
 
-  const frames = await withTmp(async (dir) => {
+  // Fotogramas para la IA y, en video, el ritmo de edición (cortes por segundo) para el motor de gustos.
+  const { frames, ritmo, dur } = await withTmp(async (dir) => {
     const file = await writeTmp(dir, "original", original)
-    return framesForAi(file, await probe(file, a.mime), dir)
+    const info = await probe(file, a.mime)
+    const frames = await framesForAi(file, info, dir)
+    if (info.mediaType !== "video" || !info.durationMs) return { frames, ritmo: null, dur: null }
+    const dur = info.durationMs / 1000
+    const cuts = await sceneCuts(file).catch((e) => (log("no se pudo medir el ritmo del video", { asset: a.id, error: String(e) }), null))
+    return { frames, ritmo: cuts ? ritmoDeCortes(cuts, dur) : null, dur }
   })
 
   const c = await classify({
@@ -243,6 +252,9 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
       .from("cos_assets")
       .update({
         ai_json: c,
+        traits: normalizarRasgos({ ...c.rasgos, ritmo, duracion_s: dur }),
+        traits_version: TRAITS_VERSION,
+        traits_error: null,
         quality_score: c.quality_score,
         people_present: c.people_present,
         ...(blocked ? { consent: "blocked" } : {}),
@@ -1429,4 +1441,5 @@ export const handlers: Record<string, Handler> = {
   "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,
+  ...gustosHandlers,
 }
