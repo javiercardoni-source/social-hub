@@ -1,3 +1,5 @@
+> ✅ **Etapas 1 y 2 CONSTRUIDAS Y EN PRODUCCIÓN el 30-09-2026** (commits 7abd431 y siguientes, migración 0019). Estado y hallazgos 34-41 en `.gauntlet/`. Falta la prueba final con Javier (§5): aprobar el reel de prueba de FasutoFudo que quedó en Aprobaciones.
+
 # F9 · Video primero (motor de reels): traspaso para quien lo construye
 
 > Escrito el 30-09-2026 al cerrar las pruebas con Javier. **La spec manda:** `spec.md` (en esta
@@ -101,7 +103,7 @@
 - El espaciado de letras: satori lo respeta (`letterSpacing`); Creatomate no lo aplicaba.
 - satori no lee WOFF2 (Motores ya lo valida).
 - Supabase corta subidas en ~50 MB aunque el bucket diga 500: `compactVideo()` en media.ts.
-- Worker: 1 CPU y 768 MB. Un reel de 15 s tarda ~15 s en una Mac; en el server calcular 1–2 min:
+- Worker: 1 CPU y **1,5 GB desde el 30-09** (con 768 MB la unión final murió por memoria: hallazgo 40). Un reel de 15 s tarda ~15 s en una Mac y **~65 s en el server** (medido):
   usar `-preset veryfast` en clips y `medium` solo en la unión.
 - La IA a veces propone cosas contra el brandbook ("BRINDIS DE AMIGOS", "RECIÉN HECHO"): las
   reglas van en el prompt **y** un filtro de palabras en `normalizarGuion` (sumar: brindis, vino,

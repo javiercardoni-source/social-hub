@@ -30,7 +30,7 @@ const FF_MS = 5 * 60_000
 const ff = (args: string[]) => run("ffmpeg", ["-loglevel", "error", "-y", ...args], { timeout: FF_MS, maxBuffer: 64 * 1024 * 1024 })
 
 /** Subir este número rearma todos los reels (si cambia el diseño del motor). */
-export const REEL_VERSION = "1"
+export const REEL_VERSION = "2"
 const W = 1080
 const H = 1920
 
@@ -137,7 +137,7 @@ async function png(node: Nodo, file: string, kit: KitMarca) {
 /** Texto grande a la altura del 24 % (fuera de lo que tapa Instagram arriba). */
 const textoArriba = (t: string, kit: KitMarca) =>
   el({ width: W, height: H, justifyContent: "center", paddingTop: H * 0.24 - 60 }, [
-    el({ fontFamily: kit.titulo.name, fontSize: 118, color: "#fff", textShadow: "0 6px 24px rgba(0,0,0,0.6)", textAlign: "center", maxWidth: W - 120 }, t),
+    el({ fontFamily: kit.titulo.name, fontSize: 118, color: "#fff", textShadow: "0 0 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.85), 0 6px 28px rgba(0,0,0,0.6)", textAlign: "center", maxWidth: W - 120 }, t),
   ])
 
 /** Placa final: título, precio (solo si hay), recuadro, pie (solo si hay) y logo si la marca lleva. */
