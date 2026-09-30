@@ -1,0 +1,16 @@
+# Dependabot: avisa y abre PRs cuando una dependencia tiene una vulnerabilidad conocida.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Un solo PR para next + react, que van juntos
+      next:
+        patterns:
+          - next
+          - eslint-config-next
+          - react
+          - react-dom
