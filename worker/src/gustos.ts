@@ -292,8 +292,9 @@ const backfillTraits: Handler = async (job, { db, queue, log, signal }) => {
   }
   log("backfill de rasgos: tanda", { hechos, fallidos, costoUsd: Math.round(costo * 1000) / 1000, gastado: Math.round((gastado + costo) * 100) / 100, tope })
 
-  // Queda trabajo y plata: sigue en un rato (clave propia por eslabón de la cadena).
-  if (!signal.aborted && pendientes - hechos - fallidos > 0 && gastado + costo < tope) {
+  // Queda trabajo y plata: sigue en un rato (clave propia por eslabón de la cadena). También si el
+  // worker se está apagando (un deploy): si no, la cadena terminaba "hecha" y el backfill se frenaba solo.
+  if (pendientes - hechos - fallidos > 0 && gastado + costo < tope) {
     // Si esta tanda llamó a Meta, la próxima va más espaciada (60 s) para no pisar la medición de métricas.
     const espera = esperarMeta ? PAUSA_LIMITE_META_MS : llamadasMeta > 0 ? 60_000 : 20_000
     await queue.enqueue("traits:backfill", { ...job.payload }, { runAt: new Date(Date.now() + espera), dedupeKey: `traits:backfill:after:${job.id}` })
