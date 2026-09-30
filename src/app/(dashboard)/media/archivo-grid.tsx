@@ -141,7 +141,7 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
               >
                 {r.thumb && <Image src={r.thumb} alt="" fill className={cn("object-cover", marcado && "opacity-80")} sizes="220px" />}
                 <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                  {r.source === "instagram" ? "Ya publicado en IG" : r.source === "drive" ? "Base de fotos" : "Carpeta"}
+                  {r.source === "instagram" ? "Ya publicado en IG" : r.source === "drive" ? "Base de fotos" : r.source === "embajadores" ? "Embajador" : "Carpeta"}
                 </span>
                 {r.media_type === "video" && <span className="absolute bottom-2 left-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">Video</span>}
                 {seleccionable && (

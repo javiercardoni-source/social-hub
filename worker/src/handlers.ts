@@ -31,6 +31,7 @@ import { syncAccount } from "./metrics.ts"
 import { arDay, climaParaHoy, contextForBrand, syncContext } from "./context.ts"
 import { datosParaIA, normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
 import { ingestTurnos } from "./turnos.ts"
+import { ingestEmbajadores } from "./embajadores.ts"
 import { defaultTemplate, type Template } from "./overlay.ts"
 import {
   checkAccount,
@@ -1622,6 +1623,12 @@ const ingestTurnosJob: Handler = async (_job, { db, queue, log }) => {
   if (r.tomadas) log("historias de Turnos ingresadas", r)
 }
 
+// ── ingest:embajadores (F4B) ─────────────────────────────────────────────────
+const ingestEmbajadoresJob: Handler = async (_job, { db, queue, log }) => {
+  const r = await ingestEmbajadores(db, queue, log)
+  if (r.tomadas || r.puntuadas) log("embajadores: material tomado y/o puntajes avisados", r)
+}
+
 // ── post:delete ─────────────────────────────────────────────────────────────
 const deletePost: Handler = async (job, { db, log }) => {
   const postId = idFrom(job, "post_id")
@@ -1741,6 +1748,7 @@ export const handlers: Record<string, Handler> = {
   "feed:analyze": analyzeFeed,
   "archive:import-drive-file": importDriveFile,
   "ingest:turnos": ingestTurnosJob,
+  "ingest:embajadores": ingestEmbajadoresJob,
   "accounts:check": checkAccounts,
   ...gustosHandlers,
   "reel:build": buildReel,

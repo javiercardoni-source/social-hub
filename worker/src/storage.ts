@@ -14,10 +14,14 @@ export const MEDIA_BUCKET = "cos-media"
 
 export type StorageDriver = "supabase" | "drive"
 
+// Buffer para lo de siempre (foto/video ya en memoria); stream para lo que no se quiere
+// bajar entero a memoria antes de subirlo (embajadores F4B: videos de hasta 600 MB).
+export type UploadBody = Buffer | NodeJS.ReadableStream | ReadableStream<Uint8Array>
+
 export interface MediaStorage {
   readonly driver: StorageDriver
   download(key: string): Promise<Buffer>
-  upload(key: string, data: Buffer, contentType: string): Promise<void>
+  upload(key: string, data: UploadBody, contentType: string): Promise<void>
   /** URL temporal de lectura (Meta la necesita para las fotos: PLAN §9.4). */
   signedUrl(key: string, ttlSeconds: number): Promise<string>
 }
@@ -32,6 +36,8 @@ export function supabaseStorage(db: SupabaseClient): MediaStorage {
       return Buffer.from(await data.arrayBuffer())
     },
     async upload(key, data, contentType) {
+      // @supabase/storage-js soporta pasar un stream tal cual (pone "duplex: half" solo):
+      // no hace falta juntar todo en un Buffer antes de subir.
       const { error } = await bucket().upload(key, data, { contentType, upsert: false })
       // Si ya existe (un reintento después de subirlo), está bien: mismo contenido.
       if (error && !/exists|duplicate/i.test(error.message)) throw new Error(`no pude subir ${key}: ${error.message}`)

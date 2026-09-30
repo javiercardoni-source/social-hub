@@ -235,6 +235,19 @@ import("./turnos.ts").then(({ turnosConfig }) => {
   shutdown.signal.addEventListener("abort", () => clearInterval(t), { once: true })
 })
 
+// Material del Programa Embajadores (LoyalEngine, F4B): cada 3 minutos, solo si está
+// configurado. Apagado sin error si faltan LOYAL_API_URL / CONTENT_OS_SECRET_LOYAL.
+import("./embajadores.ts").then(({ embajadoresConfig }) => {
+  if (!embajadoresConfig()) return log("LoyalEngine no configurado (LOYAL_API_URL / CONTENT_OS_SECRET_LOYAL): embajadores apagado")
+  const tick = () =>
+    queue
+      .enqueue("ingest:embajadores", {}, { dedupeKey: `embajadores:${Math.floor(Date.now() / 180_000)}` })
+      .catch((e) => log("no pude encolar Embajadores", { error: String(e) }))
+  void tick()
+  const t = setInterval(() => void tick(), 180_000)
+  shutdown.signal.addEventListener("abort", () => clearInterval(t), { once: true })
+})
+
 const done = loop()
 
 async function stop(signal: string) {

@@ -38,7 +38,7 @@ type Row = {
   cos_media: { metrics: Record<string, number>; posted_at: string } | null
 }
 
-export type Origen = "todo" | "drive" | "instagram"
+export type Origen = "todo" | "drive" | "instagram" | "embajadores"
 
 export async function ArchivoView(props: {
   brandId: string | null
@@ -113,6 +113,7 @@ export async function ArchivoView(props: {
           {chip(link({ origen: "todo" }), "Todo", props.origen === "todo")}
           {chip(link({ origen: "drive" }), "Base de fotos", props.origen === "drive")}
           {chip(link({ origen: "instagram" }), "Instagram", props.origen === "instagram")}
+          {chip(link({ origen: "embajadores" }), "Embajadores", props.origen === "embajadores")}
           <span className="mx-1 text-muted-foreground">·</span>
           {chip(link({ tipo: "todo" }), "Fotos y videos", props.tipo === "todo")}
           {chip(link({ tipo: "fotos" }), "Fotos", props.tipo === "fotos")}

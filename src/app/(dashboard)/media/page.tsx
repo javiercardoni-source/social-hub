@@ -70,7 +70,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
   // Pestaña Archivo (F2): el material que ya existía, para revisar y elegir.
   if (sp.vista === "archivo") {
     return <ArchivoView brandId={brand?.id ?? null} brandName={brand?.name ?? null} estado={sp.estado === "usados" || sp.estado === "descartados" ? sp.estado : "pendientes"} orden={sp.orden === "recientes" ? "recientes" : "calidad"}
-        origen={sp.origen === "drive" || sp.origen === "instagram" ? sp.origen : "todo"}
+        origen={sp.origen === "drive" || sp.origen === "instagram" || sp.origen === "embajadores" ? sp.origen : "todo"}
         tipo={sp.tipo === "fotos" || sp.tipo === "videos" ? sp.tipo : "todo"}
       />
   }
