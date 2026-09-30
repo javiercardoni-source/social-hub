@@ -3,9 +3,9 @@
 import { useState, useTransition } from "react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
-import { Check, Loader2 } from "lucide-react"
+import { Check, Clapperboard, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { descartarVarios, recuperarVarios } from "@/lib/cos/actions"
+import { armarReelConVarias, descartarVarios, recuperarVarios } from "@/lib/cos/actions"
 import { explicarError } from "@/lib/ui-errors"
 import { cn } from "@/lib/utils"
 import { ArchivoAcciones } from "./archivo-client"
@@ -32,12 +32,32 @@ export type ArchivoItem = {
  */
 export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "pendientes" | "usados" | "descartados" }) {
   const router = useRouter()
-  const [sel, setSel] = useState<Set<string>>(new Set())
+  // Array (no Set): el orden en que se tocan es el orden de las piezas en el reel.
+  const [sel, setSelArr] = useState<string[]>([])
+  const setSel = (x: Set<string> | ((s: Set<string>) => Set<string>)) =>
+    setSelArr((prev) => [...(typeof x === "function" ? x(new Set(prev)) : x)])
   const [pending, start] = useTransition()
   const [msg, setMsg] = useState<string | null>(null)
   const seleccionable = estado !== "usados"
   const visibles = items.map((i) => i.id)
-  const todos = visibles.length > 0 && visibles.every((id) => sel.has(id))
+  const todos = visibles.length > 0 && visibles.every((id) => sel.includes(id))
+  // Para el reel solo cuentan las ya analizadas, en el orden en que se marcaron.
+  const listas = new Set(items.filter((i) => i.quality_score != null && ["READY", "IN_USE"].includes(i.status)).map((i) => i.id))
+  const paraReel = sel.filter((id) => listas.has(id))
+
+  function armarReel() {
+    setMsg(null)
+    start(async () => {
+      try {
+        const r = await armarReelConVarias(paraReel)
+        setMsg(`Armando un reel con ${r.piezas} piezas: en unos minutos aparece en Aprobaciones`)
+        setSel(new Set())
+        router.refresh()
+      } catch (e) {
+        setMsg(explicarError(e))
+      }
+    })
+  }
 
   const toggle = (id: string) =>
     setSel((s) => {
@@ -48,7 +68,7 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
     })
 
   function aplicar() {
-    const ids = [...sel].filter((id) => visibles.includes(id))
+    const ids = sel.filter((id) => visibles.includes(id))
     setMsg(null)
     start(async () => {
       try {
@@ -75,16 +95,29 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
             <input type="checkbox" checked={todos} onChange={() => setSel(todos ? new Set() : new Set(visibles))} className="h-4 w-4" />
             Seleccionar todas las de la pantalla
           </label>
-          <span className="text-xs text-muted-foreground">{sel.size ? `${sel.size} seleccionadas` : "o tocá las fotos para marcarlas"}</span>
+          <span className="text-xs text-muted-foreground">{sel.length ? `${sel.length} seleccionadas` : "o tocá las fotos para marcarlas"}</span>
+          {estado === "pendientes" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              disabled={paraReel.length < 2 || paraReel.length > 8 || pending}
+              title="Un reel con las piezas marcadas, en el orden en que las tocaste (2 a 8, ya analizadas)"
+              onClick={armarReel}
+            >
+              <Clapperboard className="h-3.5 w-3.5" />
+              Armar reel{paraReel.length >= 2 ? ` (${paraReel.length})` : ""}
+            </Button>
+          )}
           <Button
             size="sm"
             variant={estado === "descartados" ? "default" : "destructive"}
-            className="ml-auto"
-            disabled={!sel.size || pending}
+            className={estado === "pendientes" ? "" : "ml-auto"}
+            disabled={!sel.length || pending}
             onClick={aplicar}
           >
             {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {estado === "descartados" ? `Recuperar ${sel.size || ""}` : `Descartar ${sel.size || ""}`}
+            {estado === "descartados" ? `Recuperar ${sel.length || ""}` : `Descartar ${sel.length || ""}`}
           </Button>
           {msg && <p className="w-full text-xs text-muted-foreground">{msg}</p>}
         </div>
@@ -94,7 +127,8 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
         {items.map((r) => {
           // Lo descartado queda ARCHIVED: si tiene puntaje, se había llegado a analizar.
           const analizado = r.quality_score != null && (estado === "descartados" || ["READY", "IN_USE"].includes(r.status))
-          const marcado = sel.has(r.id)
+          const marcado = sel.includes(r.id)
+          const orden = paraReel.indexOf(r.id)
           return (
             <div key={r.id} className={cn("flex flex-col overflow-hidden rounded-xl border bg-card", marcado && "ring-2 ring-primary")}>
               <button
@@ -117,7 +151,7 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
                       marcado ? "border-primary bg-primary text-white" : "border-white/90 bg-black/30",
                     )}
                   >
-                    {marcado && <Check className="h-4 w-4" />}
+                    {marcado && (estado === "pendientes" && orden >= 0 && paraReel.length > 1 ? <span className="text-xs font-bold">{orden + 1}</span> : <Check className="h-4 w-4" />)}
                   </span>
                 )}
               </button>

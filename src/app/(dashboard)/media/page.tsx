@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PenSquare, AlertTriangle, Video, Image as ImageIcon, Upload } from "lucide-react"
 import { ArchivoView, BibliotecaTabs } from "./archivo"
+import { MarcaReel, SeleccionReel } from "./cocina-reel"
 import { PermisoCocina } from "./archivo-client"
 
 export const dynamic = "force-dynamic"
@@ -121,6 +122,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
             </div>
           </div>
         ) : (
+          <SeleccionReel>
           <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {rows.map((asset) => {
               const thumb = asset.thumb_key ? thumbMap[asset.thumb_key] : null
@@ -170,6 +172,9 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
                         </div>
                       )}
                     </div>
+
+                    {/* Marcar para armar un reel con varias piezas (F9) */}
+                    {isReady && !hasConsent && <MarcaReel id={asset.id} />}
 
                     {/* Video duration */}
                     {asset.media_type === "video" && asset.duration_ms && (
@@ -228,6 +233,7 @@ export default async function BibliotecaPage({ searchParams }: { searchParams: P
               )
             })}
           </div>
+          </SeleccionReel>
         )}
       </div>
     </>

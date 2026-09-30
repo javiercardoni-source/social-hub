@@ -27,6 +27,8 @@ export type PostItem = {
   qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   suggestions: { at: string; label: string; lift: string; up: boolean; confianza: string }[]
   template: string
+  /** Reel armado por el motor desde un guion (F9). null = pieza con plantilla. */
+  reel: { idea: string; segundos: number; tomas: { porQue: string; segundos: number; fuente: number }[]; fuentes: number; respaldo: boolean; precio: string | null } | null
   renderUrl: string | null
   accountName: string
 }
@@ -366,8 +368,46 @@ function GrupoCard({ g }: { g: Grupo }) {
             ))}
           </div>
 
+          {/* Reel del motor (F9): gancho editable y el porqué de cada toma */}
+          {p.reel && (
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                Reel · {p.reel.segundos} s · {p.reel.tomas.length} tomas{p.reel.fuentes > 1 ? ` de ${p.reel.fuentes} piezas` : ""}
+              </label>
+              <input
+                value={t.overlay}
+                maxLength={40}
+                disabled={!!resuelto[p.id]}
+                onChange={(e) => set({ overlay: e.target.value.toUpperCase() })}
+                placeholder="GANCHO CORTO (2 A 4 PALABRAS)"
+                aria-label="Gancho del reel: el texto de la tapa"
+                className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-semibold uppercase outline-none focus:ring-2 focus:ring-primary/40"
+              />
+              <p className="text-xs text-muted-foreground">El gancho va sobre la primera toma y es la tapa del reel en el perfil.</p>
+              {p.reel.respaldo && (
+                <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">
+                  ⚠ La IA no pudo armar el guion: se armó uno automático. Probá «Rehacer con IA».
+                </p>
+              )}
+              {p.reel.idea && <p className="text-sm">{p.reel.idea}</p>}
+              {p.reel.precio && <p className="text-xs text-muted-foreground">El cierre muestra el precio de Datos vigentes: <b>{p.reel.precio}</b></p>}
+              <details className="rounded-xl bg-muted/50 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-semibold">Por qué estas tomas</summary>
+                <ol className="mt-1.5 list-decimal space-y-1 break-words pl-4 text-muted-foreground">
+                  {p.reel.tomas.map((x, i) => (
+                    <li key={i}>
+                      <span className="tabular-nums">{x.segundos.toFixed(1)} s</span>
+                      {p.reel!.fuentes > 1 ? ` · pieza ${x.fuente + 1}` : ""}
+                      {x.porQue ? ` — ${x.porQue}` : ""}
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            </div>
+          )}
+
           {/* Texto sobre la imagen y plantilla de marca */}
-          <div className="space-y-2">
+          {!p.reel && <div className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Sobre la imagen</label>
             <div className="flex flex-wrap gap-1.5">
               {TEMPLATES.map((tp) => (
@@ -425,7 +465,9 @@ function GrupoCard({ g }: { g: Grupo }) {
                 className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-primary/40"
               />
             )}
-            {p.platform === "instagram" && p.postType === "feed" && !g.isVideo ? (
+          </div>}
+          <div className="space-y-2">
+            {!p.reel && p.platform === "instagram" && p.postType === "feed" && !g.isVideo ? (
               <p className="pt-1 text-xs text-muted-foreground">
                 Música: los posts de foto no la admiten (Meta no lo permite por la API). La versión con música es el Reel, que también sale en el feed.
               </p>
@@ -439,7 +481,7 @@ function GrupoCard({ g }: { g: Grupo }) {
                     {[
                       {
                         key: null as string | null,
-                        name: g.isVideo ? "Sonido original" : p.postType === "reel" ? "Sin música" : "Sin música (sale como foto)",
+                        name: p.reel ? "Sin música" : g.isVideo ? "Sonido original" : p.postType === "reel" ? "Sin música" : "Sin música (sale como foto)",
                         url: null as string | null,
                       },
                       ...g.music,

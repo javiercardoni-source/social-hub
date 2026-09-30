@@ -47,3 +47,65 @@ describe("lineaDeTiempo", () => {
     expect(l.total).toBeCloseTo(l.inicios[2] + 2 - FUNDIDO + CIERRE)
   })
 })
+
+describe("reglas de marca y cierre (F9)", () => {
+  it("un texto con una palabra fuera del brandbook se descarta; la tapa usa otro que pasó", async () => {
+    const { normalizarGuion } = await import("../../shared/cos/reel")
+    const g = normalizarGuion(
+      { tomas: [{ fuente: 1 }, { fuente: 1 }, { fuente: 1 }], gancho: "Brindis de amigos", medio: "recién hecho", titulo_cierre: "Noche de sushi" },
+      fuentes,
+    )
+    expect(g.gancho).toBe("NOCHE DE SUSHI")
+    expect(g.medio).toBe("")
+    const conMarca = normalizarGuion({ tomas: [{ fuente: 1 }], gancho: "sushi gourmet" }, fuentes, [], { prohibidas: ["gourmet"] })
+    expect(conMarca.gancho).toBe("")
+  })
+
+  it("combo solo si existe en Datos vigentes (sin importar tildes ni mayúsculas)", async () => {
+    const { normalizarGuion } = await import("../../shared/cos/reel")
+    expect(normalizarGuion({ tomas: [{ fuente: 1 }], combo: "qatar premium " }, fuentes, [], { combos: ["Qatar Premium"] }).combo).toBe("Qatar Premium")
+    expect(normalizarGuion({ tomas: [{ fuente: 1 }], combo: "Combo inventado" }, fuentes, [], { combos: ["Qatar Premium"] }).combo).toBe("")
+  })
+
+  it("el porqué de cada toma se guarda (corto)", async () => {
+    const { normalizarGuion } = await import("../../shared/cos/reel")
+    const g = normalizarGuion({ tomas: [{ fuente: 1, por_que: "  arranca   con lo más rico " + "x".repeat(300) }] }, fuentes)
+    expect(g.tomas[0].por_que!.startsWith("arranca con lo más rico")).toBe(true)
+    expect(g.tomas[0].por_que!.length).toBeLessThanOrEqual(160)
+  })
+
+  it("cierre: precio solo del combo activo con precio; pie de zonas cortas o retiro; nada inventado", async () => {
+    const { cierreDesdeDatos } = await import("../../shared/cos/reel")
+    const datos = { combos: [{ nombre: "Qatar Premium", precio: "$ 31.900", activo: true }, { nombre: "Viejo", precio: "$ 1", activo: false }], zonas: "Paternal y Agronomía", retiro: "" }
+    expect(cierreDesdeDatos("Qatar Premium", datos)).toEqual({ precio: "$ 31.900", pie: "ENVÍOS PATERNAL Y AGRONOMÍA" })
+    expect(cierreDesdeDatos("Viejo", datos).precio).toBeNull()
+    expect(cierreDesdeDatos("", datos).precio).toBeNull()
+    expect(cierreDesdeDatos("", { combos: [], zonas: "x".repeat(60), retiro: "Retiro en Av. Siempreviva 742" }).pie).toBe("RETIRO EN AV. SIEMPREVIVA 742")
+    expect(cierreDesdeDatos("", { combos: [], zonas: "", retiro: "" })).toEqual({ precio: null, pie: null })
+  })
+
+  it("guion de respaldo: siempre hay tomas, dentro de los videos, alternando movimientos", async () => {
+    const { guionPorDefecto } = await import("../../shared/cos/reel")
+    const g = guionPorDefecto([{ tipo: "video", duracion: 10, cortes: [3, 6] }, { tipo: "foto", duracion: null }], ["a.mp3"])
+    expect(g.tomas).toHaveLength(5)
+    for (const t of g.tomas.filter((x) => x.fuente === 0)) expect(t.trim_start + t.duracion).toBeLessThanOrEqual(10)
+    expect(new Set(g.tomas.map((t) => t.movimiento)).size).toBeGreaterThan(2)
+    expect(g.tomas[0].transicion).toBe("corte")
+    expect(g.musica).toBe("a.mp3")
+    expect(guionPorDefecto([{ tipo: "video", duracion: 0.3 }]).tomas).toHaveLength(0)
+  })
+
+  it("la firma del reel cambia con el gancho, la música, el kit y el cierre; no con el porqué", async () => {
+    const { firmaReel, normalizarGuion } = await import("../../shared/cos/reel")
+    const guion = normalizarGuion({ tomas: [{ fuente: 1, por_que: "a" }], gancho: "hola" }, fuentes)
+    const base = { version: "1", guion, gancho: "HOLA", musicaKey: "music/x/a.mp3", fuentes: ["v1"], kitVersion: "", kitMarca: { font: "A" } }
+    const f0 = firmaReel(base)
+    expect(firmaReel({ ...base, gancho: "CHAU" })).not.toBe(f0)
+    expect(firmaReel({ ...base, musicaKey: "music/x/b.mp3" })).not.toBe(f0)
+    expect(firmaReel({ ...base, kitVersion: "logo2" })).not.toBe(f0)
+    expect(firmaReel({ ...base, kitMarca: { font: "B" } })).not.toBe(f0)
+    expect(firmaReel({ ...base, fuentes: ["v1", "v2"] })).not.toBe(f0)
+    expect(firmaReel({ ...base, guion: { ...guion, cierre: { precio: "$ 1", pie: null } } })).not.toBe(f0)
+    expect(firmaReel({ ...base, guion: { ...guion, tomas: guion.tomas.map((t) => ({ ...t, por_que: "otro" })) } })).toBe(f0)
+  })
+})

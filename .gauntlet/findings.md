@@ -42,3 +42,12 @@ Críticos: Data, Integration, UX (subagentes independientes). Sin P0/P1 abiertos
 - **31 · FALSO POSITIVO:** "toques rápidos en chips se pisan": `disabled={pending}` bloquea el segundo toque.
 - **32 · FALSO POSITIVO:** "BPM sin pulso claro mientras mide": en estado midiendo se muestra "Midiendo…".
 - **33 · Descartado/P3:** carreras de upsert entre web/script/sync (dedupe por clave, sin IA); rasgos duplicados en ai_json (bytes); analysis_error no se reintenta solo (a propósito; re-subir lo resetea); pantalla larga con 20 temas (compactar en M1); storage_key sin constraint de inmutable (nadie lo actualiza).
+
+## F9 Video primero (motor de reels) — 30-09-2026
+Críticos: worker/datos/publicación y UX (subagentes independientes). Sin P0/P1 abiertos.
+- **34 · P1 REAL (arreglado, visto en producción con el backfill de F7):** Haiku devolvió un rasgo fuera de la lista pese al enum del schema; la validación estricta hacía fallar la imagen entera y, con el mismo schema, habría hecho fallar la clasificación completa de un asset nuevo. Ahora el schema acepta texto (opciones en la descripción) y todo pasa por `normalizarRasgos` (lo raro queda vacío). Lo mismo en el guion del reel (movimiento/transición los corrige `normalizarGuion`).
+- **35 · P2 REAL (arreglado):** música más corta que el reel dejaba el final mudo → la música va en bucle (`-stream_loop -1`), probado con un tema de 3 s.
+- **36 · P2 REAL (arreglado):** «Armar reel» aceptaba piezas READY todavía sin analizar → exige `quality_score`.
+- **37 · P2 (arreglado):** texto largo en «Por qué estas tomas» (break-words) y placeholder del gancho.
+- **38 · Mejora propia (sin crítico):** el guion no entra en el hash → trigger en 0019 que lo congela fuera de DRAFT/PENDING_APPROVAL; precio/pie del cierre congelados al armar; clave del video por contenido (el reel, la historia y FB comparten archivo).
+- **39 · FALSO POSITIVO / preexistente:** "HEIC sin convertir" (las fotos ya pasan por el mismo ffmpeg del worker); "se pierde el gancho con F5 / Rehacer descarta cambios" (así funciona toda Aprobaciones desde antes; rehacer reemplaza a propósito); "casilla de 24 px" (toda la miniatura es el botón); render doble en paralelo (mitigado por la clave por contenido).

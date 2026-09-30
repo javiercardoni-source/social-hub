@@ -14,6 +14,7 @@
  *   metrics:sync    trae lo publicado y mide cada post según su edad (F1 analytics)
  *   accounts:check  prueba el token de cada cuenta y la marca conectada o con error
  *   music:* / traits:backfill  fichas del motor de gustos (F7), en gustos.ts
+ *   reel:build      "Armar reel" con varias piezas (F9); los reels de una sola pieza salen de post:draft
  *
  * Un manejador tira PermanentError si reintentar no sirve; cualquier otro error vuelve
  * a la cola con espera creciente (la calcula la base).
@@ -51,6 +52,8 @@ import { openDays } from "../../shared/cos/timing.ts"
 import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
 import { TRAITS_VERSION, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
 import { gustosHandlers } from "./gustos.ts"
+import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
+import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
 
 export type HandlerContext = {
   db: SupabaseClient
@@ -85,9 +88,9 @@ async function must<T>(p: PromiseLike<{ data: T | null; error: { message: string
 
 async function settings(db: SupabaseClient) {
   return must(
-    db.from("cos_settings").select("publish_mode, storage_driver, global_pause, ai_model, ai_model_light").eq("id", true).single(),
+    db.from("cos_settings").select("publish_mode, storage_driver, global_pause, ai_model, ai_model_light, foto_fija").eq("id", true).single(),
     "configuración",
-  ) as Promise<{ publish_mode: "simulated" | "live"; storage_driver: string; global_pause: boolean; ai_model: string; ai_model_light: string }>
+  ) as Promise<{ publish_mode: "simulated" | "live"; storage_driver: string; global_pause: boolean; ai_model: string; ai_model_light: string; foto_fija: boolean }>
 }
 
 async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
@@ -308,6 +311,23 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
   }
 
   const s = await settings(db)
+  // F9 · Video primero: salvo que esté prendido el post de foto fija, todo sale como reel.
+  if (!s.foto_fija) {
+    const { data: v } = await db.from("cos_asset_versions").select("id, storage_driver, storage_key, drive_file_id, mime").eq("id", a.current_version_id).single()
+    if (!v) throw new PermanentError("el asset no tiene versión")
+    const creados = await borradoresReel({ db, queue, log }, {
+      brandId: a.brand_id,
+      versiones: [v as VersionReel],
+      assetId: a.id,
+      descripcion: a.description ?? "",
+      resumen: a.ai_json?.summary ?? "",
+      origen: `asset:${a.id}`,
+      cuentas: { ig: ig?.id ?? null, fb: fb?.id ?? null },
+      largoMs: a.duration_ms,
+    })
+    log("borradores de reel listos para aprobar", { asset: a.id, formats: creados })
+    return
+  }
   const isVideo = a.media_type === "video"
   const c = await writeCaption({
     db,
@@ -388,6 +408,169 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     details_json: { formats: created, rationale: c.rationale },
   })
   log("borradores listos para aprobar", { asset: a.id, formats: created })
+}
+
+// ── reels (F9) ──────────────────────────────────────────────────────────────
+/**
+ * Arma los borradores de un reel (IG reel + IG historia + FB video) desde una o varias piezas:
+ * guion de la IA (o de respaldo), cierre con datos reales, texto de la publicación y la pieza.
+ * Idempotente por `origen`: si ya hay borradores vivos de ese origen, no crea otros.
+ */
+async function borradoresReel(
+  ctx: Pick<HandlerContext, "db" | "queue" | "log">,
+  o: {
+    brandId: string
+    versiones: VersionReel[]
+    assetId: string
+    descripcion: string
+    resumen: string
+    origen: string
+    cuentas: { ig: string | null; fb: string | null }
+    largoMs?: number | null
+  },
+): Promise<string[]> {
+  const { db, queue, log } = ctx
+  const { data: ya } = await db
+    .from("cos_posts")
+    .select("id")
+    .eq("brand_id", o.brandId)
+    .contains("montaje", { origen: o.origen })
+    .not("status", "in", "(CANCELLED,REJECTED)")
+    .limit(1)
+  if (ya?.length) return []
+
+  const s = await settings(db)
+  const brand = await brandContext(db, o.brandId)
+  const { data: b } = await db.from("cos_brands").select("datos_vigentes").eq("id", o.brandId).single()
+  const datos = normalizarDatos(b?.datos_vigentes)
+  const musicKeys = await listMusic(db, brand.slug)
+  const temas = musicKeys.map((k) => k.split("/").pop()!)
+  const { guion, respaldo } = await planearReel({
+    db,
+    model: s.ai_model,
+    brand,
+    versiones: o.versiones,
+    temas,
+    combos: datos.combos.filter((c) => c.activo).map((c) => c.nombre),
+    prohibidas: brand.rules.forbidden_words ?? [],
+    assetId: o.assetId,
+    log,
+  })
+
+  const c = await writeCaption({
+    db,
+    model: s.ai_model,
+    brand,
+    assetId: o.assetId,
+    platform: "instagram",
+    postType: "reel",
+    description: [guion.idea, o.descripcion].filter(Boolean).join(" · "),
+    aiSummary: o.resumen,
+    context: await contextForBrand(db, o.brandId).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
+    clima: await climaParaHoy(db, o.brandId).catch((e) => (log("sin clima", { error: String(e) }), null)),
+  })
+  const caption = `${c.hook.trim()}\n${c.caption.trim()}`
+  const hashtags = c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+  const mayus = (x: string) => x.replace(/[#\p{Extended_Pictographic}]/gu, "").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 40)
+  // Sin guion de la IA, la tapa y el cierre usan la frase del texto (siempre hay tapa).
+  const gancho = guion.gancho || mayus(c.overlay)
+  const montaje: GuionReel & { origen: string; respaldo: boolean } = {
+    ...guion,
+    gancho,
+    titulo_cierre: guion.titulo_cierre || gancho,
+    cierre: cierreDesdeDatos(guion.combo, datos),
+    origen: o.origen,
+    respaldo,
+  }
+  const musicKey = guion.musica ? `music/${brand.slug}/${guion.musica}` : null
+  const ganchoClima = mayus(c.overlay_clima ?? "")
+
+  const formats: { account: string; platform: string; post_type: PostType; caption: string; hashtags: string }[] = []
+  if (o.cuentas.ig) {
+    formats.push({ account: o.cuentas.ig, platform: "instagram", post_type: "reel", caption, hashtags })
+    formats.push({ account: o.cuentas.ig, platform: "instagram", post_type: "story", caption: "", hashtags: "" })
+  }
+  // Facebook: el mismo video (sale por /videos porque la pieza es un mp4).
+  if (o.cuentas.fb) formats.push({ account: o.cuentas.fb, platform: "facebook", post_type: "feed", caption, hashtags })
+
+  const created: string[] = []
+  for (const f of formats) {
+    const story = f.post_type === "story"
+    const post = (await must(
+      db
+        .from("cos_posts")
+        .insert({
+          brand_id: o.brandId,
+          account_id: f.account,
+          platform: f.platform,
+          post_type: f.post_type,
+          caption: f.caption,
+          hashtags: f.hashtags,
+          // La historia del clima lleva la frase del clima como tapa (regla vigente).
+          overlay_text: (story && ganchoClima ? ganchoClima : gancho).slice(0, 80),
+          template: "none",
+          music_key: musicKey,
+          montaje,
+          uses_weather: c.usa_clima || (story && !!ganchoClima),
+          status: "DRAFT",
+        })
+        .select("id")
+        .single(),
+      "post",
+    )) as { id: string }
+    await must(
+      db.from("cos_post_media").insert(o.versiones.map((v, i) => ({ post_id: post.id, version_id: v.id, position: i }))).select("post_id"),
+      "archivos del post",
+    )
+    await setPost(db, post.id, { status: "PENDING_APPROVAL" })
+    await queue.enqueue("post:render", { post_id: post.id }, { dedupeKey: `render:${post.id}` })
+    created.push(`${f.platform}:${f.post_type}`)
+  }
+  await db.from("cos_audit_log").insert({
+    event: "post:drafted",
+    entity_type: "asset",
+    entity_id: o.assetId,
+    actor: "worker",
+    details_json: { formats: created, reel: true, respaldo, fuentes: o.versiones.length, idea: guion.idea, rationale: c.rationale },
+  })
+  return created
+}
+
+/**
+ * "Armar reel" (F9 etapa 2): varias piezas de la misma marca → un reel. Lo encola la web con un
+ * build_id (idempotencia: un reintento no arma otro).
+ */
+const buildReel: Handler = async (job, ctx) => {
+  const { db, log } = ctx
+  const buildId = idFrom(job, "build_id")
+  const ids = job.payload.asset_ids
+  if (!Array.isArray(ids) || !ids.length || ids.length > 8 || ids.some((x) => typeof x !== "string")) throw new PermanentError("payload sin asset_ids válidos (1 a 8)")
+  const { data, error } = await db
+    .from("cos_assets")
+    .select("id, brand_id, consent, status, description, ai_json, current_version_id, cos_asset_versions!cos_assets_current_version_fk(id, storage_driver, storage_key, drive_file_id, mime, size_bytes)")
+    .in("id", ids as string[])
+  if (error) throw new Error(`assets: ${error.message}`)
+  type A = { id: string; brand_id: string; consent: string; status: string; description: string | null; ai_json: { summary?: string } | null; cos_asset_versions: (VersionReel & { size_bytes: number | null }) | null }
+  const byId = new Map(((data ?? []) as unknown as A[]).map((a) => [a.id, a]))
+  // En el orden que eligió Javier.
+  const assets = (ids as string[]).map((i) => byId.get(i)).filter((a): a is A => !!a)
+  if (assets.length !== ids.length) throw new PermanentError("alguna pieza ya no existe")
+  if (new Set(assets.map((a) => a.brand_id)).size > 1) throw new PermanentError("las piezas son de marcas distintas")
+  if (assets.some((a) => a.consent === "blocked")) throw new PermanentError("alguna pieza está bloqueada por consentimiento")
+  if (assets.some((a) => !a.cos_asset_versions)) throw new PermanentError("alguna pieza no tiene archivo listo")
+  if (assets.some((a) => (a.cos_asset_versions?.size_bytes ?? 0) > 48 * 1024 * 1024)) throw new PermanentError("algún video pesa más de 48 MB")
+  const brandId = assets[0].brand_id
+  const { data: accounts } = await db.from("cos_social_accounts").select("id, platform").eq("brand_id", brandId).in("platform", ["instagram", "facebook"]).neq("status", "disabled")
+  const creados = await borradoresReel(ctx, {
+    brandId,
+    versiones: assets.map((a) => a.cos_asset_versions!),
+    assetId: assets[0].id,
+    descripcion: assets.map((a) => a.description).filter(Boolean).join(" · ").slice(0, 1500),
+    resumen: assets.map((a) => a.ai_json?.summary).filter(Boolean).join(" · ").slice(0, 1500),
+    origen: `build:${buildId}`,
+    cuentas: { ig: accounts?.find((x) => x.platform === "instagram")?.id ?? null, fb: accounts?.find((x) => x.platform === "facebook")?.id ?? null },
+  })
+  log("reel armado con varias piezas", { build: buildId, piezas: assets.length, formats: creados })
 }
 
 // ── biblioteca de música (cos-media/music/<marca>/, la carga scripts/musica-subir.mjs) ──
@@ -572,10 +755,16 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
     const caption = fullCaption(p.caption, p.hashtags)
     // Posts de un solo archivo: se publica la pieza final (la misma que se vio al aprobar).
     let prepared: { items: MediaItem[]; staged: string[] }
-    const rp = p.post_type === "carousel" ? null : await loadRenderPost(db, p.id)
+    // Reel con guion (F9): la pieza aprobada, o se arma desde el mismo guion.
+    const reel = p.post_type === "carousel" ? null : await loadReelPost(db, p.id)
+    const rp = p.post_type === "carousel" || reel ? null : await loadRenderPost(db, p.id)
     // Se publica la pieza que se aprobó, tal cual (aunque después cambie la tipografía o el logo).
-    const key = rp ? (rp.render_key && (await exists(db, rp.render_key)) ? rp.render_key : await ensureRender(db, rp)) : null
-    if (rp && key) {
+    const key = reel
+      ? reel.render_key && (await exists(db, reel.render_key)) ? reel.render_key : await ensureReel(db, reel)
+      : rp
+        ? rp.render_key && (await exists(db, rp.render_key)) ? rp.render_key : await ensureRender(db, rp)
+        : null
+    if ((rp || reel) && key) {
       const kind = key.endsWith(".mp4") ? "video" : "photo"
       prepared = { items: [{ kind, url: await supabaseStorage(db).signedUrl(key, 3600) }], staged: [] }
     } else {
@@ -594,6 +783,8 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
             existingContainerId: p.remote_container_id,
             saveContainer: (id) => setPost(db, p.id, { remote_container_id: id }),
             signal,
+            // Tapa del reel en el perfil: el cuadro donde el gancho ya se lee entero.
+            thumbOffsetMs: reel && p.post_type === "reel" ? TAPA_MS : undefined,
           })
         : p.platform === "facebook"
           ? await publishFacebook({ pageId: account.external_id, token, type: p.post_type, caption, media: prepared.items })
@@ -639,6 +830,18 @@ const renderPost: Handler = async (job, { db, log }) => {
   const s = await settings(db)
   // Si lo editan mientras se arma, se vuelve a armar con lo último (nunca queda una pieza vieja).
   for (let i = 0; i < 3; i++) {
+    // Reel con guion (F9): se arma desde el guion; no hay plantilla ni posiciones que probar.
+    const reel = await loadReelPost(db, postId)
+    if (reel) {
+      if (["PUBLISHED", "PUBLISHING", "CANCELLED", "REJECTED"].includes(reel.status)) return
+      const key = await ensureReel(db, reel)
+      const now = await loadReelPost(db, postId)
+      if (!now || now.overlay_text !== reel.overlay_text || now.music_key !== reel.music_key || JSON.stringify(now.montaje) !== JSON.stringify(reel.montaje)) continue
+      await setPost(db, postId, { render_key: key, render_qa: { skipped: "reel" } })
+      await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
+      log("reel listo", { post: postId, key })
+      return
+    }
     const p = await loadRenderPost(db, postId)
     if (["PUBLISHED", "PUBLISHING", "CANCELLED", "REJECTED"].includes(p.status)) return
     // Ya resuelta y revisada (o aprobada): solo se asegura que exista, sin volver a decidir.
@@ -702,6 +905,73 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
 
   const s = await settings(db)
   const brand = await brandContext(db, first.brand_id)
+
+  // Reel con guion (F9): se rehace el guion (otras tomas y otro gancho, siguiendo el pedido).
+  const reelPrev = await loadReelPost(db, first.id)
+  if (reelPrev) {
+    const { data: bd } = await db.from("cos_brands").select("datos_vigentes").eq("id", first.brand_id).single()
+    const datos = normalizarDatos(bd?.datos_vigentes)
+    const musicKeys = await listMusic(db, brand.slug)
+    const temas = musicKeys.map((k) => k.split("/").pop()!)
+    const actual = reelPrev.music_key?.split("/").pop() ?? null
+    // "Otra música": la IA elige entre los temas que no son el actual.
+    const temasPedido = otraMusica && temas.length > 1 ? temas.filter((t) => t !== actual) : temas
+    const { guion, respaldo } = await planearReel({
+      db,
+      model: s.ai_model,
+      brand,
+      versiones: reelPrev.versiones,
+      temas: temasPedido,
+      combos: datos.combos.filter((x) => x.activo).map((x) => x.nombre),
+      prohibidas: brand.rules.forbidden_words ?? [],
+      pedido: request,
+      anterior: { gancho: reelPrev.montaje.gancho, idea: reelPrev.montaje.idea ?? "" },
+      assetId: asset.id,
+      postId: first.id,
+      log,
+    })
+    const cr = await writeCaption({
+      db,
+      model: s.ai_model,
+      brand,
+      assetId: asset.id,
+      platform: "instagram",
+      postType: "reel",
+      description: [guion.idea, asset.description ?? ""].filter(Boolean).join(" · "),
+      aiSummary: asset.ai_json?.summary ?? "",
+      request,
+      previous: { caption: first.caption, overlay: first.overlay_text },
+      context: await contextForBrand(db, first.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
+    })
+    const mayus = (x: string) => x.replace(/[#\p{Extended_Pictographic}]/gu, "").replace(/\s+/g, " ").trim().toUpperCase().slice(0, 40)
+    const gancho = guion.gancho || mayus(cr.overlay)
+    const montaje = { ...guion, gancho, titulo_cierre: guion.titulo_cierre || gancho, cierre: cierreDesdeDatos(guion.combo, datos), origen: (reelPrev.montaje as { origen?: string }).origen ?? "", respaldo }
+    const captionR = `${cr.hook.trim()}\n${cr.caption.trim()}`
+    const hashtagsR = cr.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")
+    const musicKey = guion.musica ? `music/${brand.slug}/${guion.musica}` : reelPrev.music_key
+    for (const p of posts) {
+      await setPost(db, p.id, {
+        caption: p.post_type === "story" ? "" : captionR,
+        hashtags: p.post_type === "story" ? "" : hashtagsR,
+        overlay_text: gancho.slice(0, 80),
+        music_key: musicKey,
+        montaje,
+        render_key: null,
+        render_qa: null,
+      })
+      await queue.enqueue("post:render", { post_id: p.id })
+    }
+    await db.from("cos_audit_log").insert({
+      event: "post:redone",
+      entity_type: "asset",
+      entity_id: asset.id,
+      actor: "worker",
+      details_json: { posts: posts.map((p) => p.id), request, otraMusica, reel: true, respaldo, idea: guion.idea },
+    })
+    log("reel rehecho con IA", { asset: asset.id, posts: posts.length, respaldo })
+    return
+  }
+
   const c = await writeCaption({
     db,
     model: s.ai_model,
@@ -1442,4 +1712,5 @@ export const handlers: Record<string, Handler> = {
   "ingest:turnos": ingestTurnosJob,
   "accounts:check": checkAccounts,
   ...gustosHandlers,
+  "reel:build": buildReel,
 }

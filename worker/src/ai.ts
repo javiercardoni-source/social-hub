@@ -6,22 +6,27 @@ import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { z } from "zod"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, rasgosPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, rasgosPrompt, reelPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { RECUADROS } from "../../shared/cos/reel.ts"
 import { RASGOS, costoUsd } from "../../shared/cos/gustos.ts"
 import { PermanentError } from "./queue.ts"
 
 /**
- * Rasgos visuales del motor de gustos (F7), con vocabulario CERRADO: el schema obliga a la IA a
- * elegir de shared/cos/gustos.ts. El ritmo y la duración de los videos no los dice la IA: los mide
- * ffmpeg.
+ * Rasgos visuales del motor de gustos (F7), con vocabulario CERRADO (shared/cos/gustos.ts).
+ * El schema acepta texto (con las opciones en la descripción) y el resultado SIEMPRE pasa por
+ * normalizarRasgos(), que descarta lo que no está en la lista: el 30-09 Haiku devolvió un "plano"
+ * fuera de la lista pese al enum y la validación estricta hacía fallar la imagen entera (y con
+ * ella la clasificación completa). Un rasgo raro queda vacío; no rompe nada. El ritmo y la
+ * duración de los videos no los dice la IA: los mide ffmpeg.
  */
+const opcion = (campo: keyof typeof RASGOS, que: string) => z.string().describe(`${que}. Exactamente una de: ${RASGOS[campo].join(" | ")}`)
 export const RasgosIA = z.object({
-  plano: z.enum(RASGOS.plano).describe("primer_plano: el producto llena el cuadro · cenital: desde arriba · medio: producto con algo de contexto · ambiente: el lugar o la escena"),
-  protagonista: z.enum(RASGOS.protagonista).describe("Qué es lo principal: producto (el plato) · manos_proceso (manos cocinando o armando) · persona · local · placa (gráfica/texto)"),
-  accion: z.enum(RASGOS.accion).describe("Qué pasa: vapor · corte (cuchillo cortando) · armado · salsa (cayendo o sirviéndose) · servido (emplatado/entrega) · nada (quieto)"),
-  luz_temp: z.enum(RASGOS.luz_temp).describe("Temperatura de la luz: calida (amarillenta/anaranjada) o fria (blanca/azulada)"),
-  luz_nivel: z.enum(RASGOS.luz_nivel).describe("clara (luminosa) u oscura (baja luz, fondo oscuro)"),
-  fondo: z.enum(RASGOS.fondo).describe("limpio (liso o sin distracciones) o cargado (muchos objetos o texto)"),
+  plano: opcion("plano", "primer_plano: el producto llena el cuadro · cenital: desde arriba · medio: producto con algo de contexto · ambiente: el lugar o la escena"),
+  protagonista: opcion("protagonista", "Qué es lo principal: producto (el plato) · manos_proceso (manos cocinando o armando) · persona · local · placa (gráfica/texto)"),
+  accion: opcion("accion", "Qué pasa: vapor · corte (cuchillo cortando) · armado · salsa (cayendo o sirviéndose) · servido (emplatado/entrega) · nada (quieto)"),
+  luz_temp: opcion("luz_temp", "Temperatura de la luz: calida (amarillenta/anaranjada) o fria (blanca/azulada)"),
+  luz_nivel: opcion("luz_nivel", "clara (luminosa) u oscura (baja luz, fondo oscuro)"),
+  fondo: opcion("fondo", "limpio (liso o sin distracciones) o cargado (muchos objetos o texto)"),
 })
 export type RasgosIA = z.infer<typeof RasgosIA>
 
@@ -431,4 +436,70 @@ export async function classifyTraits(opts: {
   await logUsage(opts.db, { purpose: "traits:backfill", model: opts.model, usage: u, assetId: opts.assetId, costUsd })
   if (!response.parsed_output) throw new Error(`la IA no devolvió rasgos válidos (stop: ${response.stop_reason})`)
   return { rasgos: response.parsed_output, costUsd }
+}
+
+/** Salida del guion de un reel (docs/reels/prompts.md §1). Siempre pasa por normalizarGuion(). */
+export const GuionIA = z.object({
+  tomas: z.array(
+    z.object({
+      fuente: z.number().int(),
+      trim_start: z.number(),
+      duracion: z.number(),
+      movimiento: z.string().describe("acercar | alejar | paneo_derecha | paneo_izquierda"),
+      foco_x: z.number(),
+      foco_y: z.number(),
+      transicion: z.string().describe("corte | fundido"),
+      por_que: z.string(),
+    }),
+  ),
+  gancho: z.string(),
+  medio: z.string(),
+  titulo_cierre: z.string(),
+  recuadro: z.string(),
+  combo: z.string(),
+  musica: z.string(),
+  idea: z.string(),
+})
+export type GuionIA = z.infer<typeof GuionIA>
+
+export type BloqueFuente = { tipo: "texto"; texto: string } | { tipo: "imagen"; jpg: Buffer }
+
+/**
+ * Guion de un reel: la IA mira las fuentes (cuadros de cada toma medida) y propone tomas,
+ * textos y música. max_tokens alto: con 4000 una vez volvió vacío por gastar todo pensando.
+ */
+export async function planReel(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  bloques: BloqueFuente[]
+  temas: string[]
+  combos: string[]
+  pedido?: string
+  anterior?: { gancho: string; idea: string }
+  assetId?: string
+  postId?: string
+}): Promise<GuionIA> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 12000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...opts.bloques.map((b) =>
+            b.tipo === "texto"
+              ? { type: "text" as const, text: b.texto }
+              : { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.jpg.toString("base64") } },
+          ),
+          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior }) },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(GuionIA) },
+  })
+  await logUsage(opts.db, { purpose: "reel:plan", model: opts.model, usage: response.usage, assetId: opts.assetId, postId: opts.postId })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió un guion válido (stop: ${response.stop_reason})`)
+  return response.parsed_output
 }

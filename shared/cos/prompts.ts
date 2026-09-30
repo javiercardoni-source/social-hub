@@ -140,3 +140,57 @@ export function captionPrompt(input: {
     .filter(Boolean)
     .join("\n")
 }
+
+/**
+ * Instrucciones del guion de un reel (F9, docs/reels/prompts.md §1). Van después de las fuentes
+ * (cuadros de cada una). La marca entra por el system (brandSystemPrompt).
+ */
+export function reelPrompt(input: {
+  marca: string
+  recuadros: readonly string[]
+  temas: string[]
+  combos: string[]
+  /** Pedido de quien aprueba al rehacer ("más movido", "arrancá con el sushi"…). */
+  pedido?: string
+  /** Guion anterior al rehacer: el nuevo tiene que ser distinto. */
+  anterior?: { gancho: string; idea: string }
+}): string {
+  return [
+    `Sos editor de reels de ${input.marca}. Armás un REEL vertical 9:16 de 12 a 16 s con estas fuentes.`,
+    "",
+    "Tomas: 4 a 6. Cada una sale de UNA fuente (una misma foto puede dar varias tomas con movimientos distintos):",
+    "- video: trim_start y duracion en segundos, DENTRO de una sola toma medida (no cruces un corte).",
+    "- foto: movimiento tipo Ken Burns (trim_start 0).",
+    "Duración de cada toma: 1.6 a 2.8 s. Arrancá con la más impactante. Alterná planos (general,",
+    "detalle, gente disfrutando si hay) y no repitas el mismo momento.",
+    'movimiento: "acercar" | "alejar" | "paneo_derecha" | "paneo_izquierda".',
+    "foco_x, foco_y (0 a 1): dónde está lo más apetitoso (hacia ahí se acerca la cámara).",
+    'transicion de entrada: "corte" | "fundido" (mayoría cortes, al ritmo; fundido para respirar).',
+    "por_que: una línea para quien aprueba, explicando por qué elegiste esa toma.",
+    "",
+    "Textos (MAYÚSCULAS, cortos, en la voz de la marca):",
+    "- gancho (2 a 3 palabras): va sobre la primera toma y es la TAPA del reel en el perfil.",
+    "- medio (2 a 3 palabras): sobre la tercera toma.",
+    "- titulo_cierre (2 a 3 palabras): placa final en negro.",
+    `- recuadro: una de ${input.recuadros.join(" | ")} (o vacío).`,
+    input.combos.length
+      ? `- combo: si la fuente muestra claramente uno de estos combos de DATOS VIGENTES, su nombre exacto: ${input.combos.join(" | ")}. Si no, vacío.`
+      : "- combo: vacío (no hay combos cargados).",
+    input.temas.length ? `- musica: una de ${input.temas.join(" | ")}.` : "- musica: vacío (la marca no tiene música cargada).",
+    "- idea: una línea, qué cuenta el reel.",
+    "",
+    "Reglas de marca (no negociables):",
+    '- Nunca inventes escasez ("últimos", "hasta agotar stock", "cupos") ni precios.',
+    '- No prometas frescura como dato técnico ("recién hecho", "fresquísimo").',
+    '- No prometas tiempos ni rapidez de entrega ("llega volando", "en minutos").',
+    "- La bebida (vino, cerveza) nunca es protagonista, aunque aparezca.",
+    "- No uses tomas de videos que ya tienen placas de texto viejas o logos de otras marcas.",
+    "- Si hay personas, que sea disfrutando.",
+    input.pedido?.trim() ? `\nPedido de quien aprueba: ${input.pedido.trim()}` : "",
+    input.anterior
+      ? `\nEs un REHACER: proponé algo claramente distinto (otras tomas, otro gancho). Anterior → gancho "${input.anterior.gancho}" · idea: ${input.anterior.idea}`
+      : "",
+  ]
+    .filter((l) => l !== "")
+    .join("\n")
+}

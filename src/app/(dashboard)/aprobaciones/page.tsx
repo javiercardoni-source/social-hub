@@ -4,6 +4,7 @@ import { signedUrls } from "@/lib/cos/storage"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { suggestionsFor } from "@/lib/cos/analytics"
 import { liftText } from "../../../../shared/cos/timing"
+import { lineaDeTiempo, type GuionReel } from "../../../../shared/cos/reel"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { ListaAprobaciones, Preparando, type Grupo } from "./aprobaciones-client"
 
@@ -27,6 +28,7 @@ type RawPost = {
   render_qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   first_render_at: string | null
   campaign: string | null
+  montaje: (GuionReel & { respaldo?: boolean }) | null
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -64,7 +66,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -163,6 +165,17 @@ export default async function AprobacionesPage() {
         confianza: x.confianza,
       })),
       template: p.template,
+      // Reel armado por el motor (F9): lo que Javier necesita para entender la elección.
+      reel: p.montaje
+        ? {
+            idea: p.montaje.idea ?? "",
+            segundos: Math.round(lineaDeTiempo(p.montaje.tomas ?? []).total),
+            tomas: (p.montaje.tomas ?? []).map((t) => ({ porQue: t.por_que ?? "", segundos: t.duracion, fuente: t.fuente })),
+            fuentes: p.cos_post_media.length,
+            respaldo: !!p.montaje.respaldo,
+            precio: p.montaje.cierre?.precio ?? null,
+          }
+        : null,
       renderUrl: p.render_key ? (urls[p.render_key] ?? null) : null,
       accountName: p.cos_social_accounts?.display_name ?? p.cos_brands?.name ?? "",
     })

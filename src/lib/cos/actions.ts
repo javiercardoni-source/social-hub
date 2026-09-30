@@ -91,7 +91,13 @@ export async function editarPost(
   if (!TEMPLATES.includes(template)) throw aviso("Plantilla inválida")
   if (!["auto", "top", "bottom"].includes(position)) throw aviso("Posición inválida")
   const db = createAdminClient()
-  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, cos_brands(slug)").eq("id", postId).single()
+  const { data: before } = await db.from("cos_posts").select("overlay_text, template, music_key, overlay_position, montaje, cos_brands(slug)").eq("id", postId).single()
+  // Reel del motor (F9): el texto es el gancho (mayúsculas) y no hay plantilla ni posición.
+  if (before?.montaje) {
+    overlay = overlay.toUpperCase().slice(0, 40)
+    template = "none"
+    position = "auto"
+  }
   const slug = (before?.cos_brands as unknown as { slug: string } | null)?.slug
   // Solo temas de la biblioteca de ESA marca.
   if (music && !music.startsWith(`music/${slug}/`)) throw aviso("Tema de música inválido")
@@ -508,4 +514,37 @@ export async function cambiarCarpetaBase(brandId: string, link: string) {
   const { error } = await db.from("cos_brands").update({ base_folder_id: id, base_folder_name: null, base_folders: [], base_estado: null }).eq("id", brandId)
   if (error) throw aviso(`No se pudo guardar la carpeta: ${error.message}`)
   revalidatePath("/media")
+}
+
+// ── Armar reel con varias piezas (F9 etapa 2) ────────────────────────────────
+
+/**
+ * Varias piezas elegidas (2 a 8, misma marca, analizadas, sin bloqueo por caras, videos de hasta
+ * 48 MB) → el worker arma UN reel con todas (reel:build) y deja los borradores en Aprobaciones.
+ * El orden de la selección es el orden de las fuentes.
+ */
+export async function armarReelConVarias(assetIds: string[]) {
+  await requireMember("editor")
+  const ids = [...new Set(assetIds)].filter((id) => UUID.test(id))
+  if (ids.length < 2) throw aviso("Elegí al menos 2 piezas (con una sola, usá «Usar»)")
+  if (ids.length > 8) throw aviso("Un reel lleva hasta 8 piezas")
+  const db = createAdminClient()
+  const { data, error } = await db.from("cos_assets").select("id, brand_id, status, consent, size_bytes, review_status, quality_score").in("id", ids)
+  if (error) throw aviso(`No se pudo armar: ${error.message}`)
+  if ((data ?? []).length !== ids.length) throw aviso("Alguna pieza ya no existe: recargá la página")
+  if (new Set(data!.map((a) => a.brand_id)).size > 1) throw aviso("Las piezas tienen que ser de la misma marca")
+  if (data!.some((a) => !["READY", "IN_USE"].includes(a.status) || a.quality_score == null)) throw aviso("Alguna pieza todavía se está analizando: probá en un rato")
+  if (data!.some((a) => a.consent === "blocked")) throw aviso("Alguna pieza tiene caras sin permiso: confirmá el permiso o sacala de la selección")
+  if (data!.some((a) => (a.size_bytes ?? 0) > 48 * 1024 * 1024)) throw aviso("Algún video pesa más de 48 MB: sacalo de la selección")
+  // Lo del archivo queda como "usado" (igual que con «Usar»).
+  await db.from("cos_assets").update({ review_status: "approved" }).in("id", ids).eq("review_status", "pending")
+  const buildId = crypto.randomUUID()
+  const { error: je } = await db.rpc("cos_enqueue_job", {
+    p_type: "reel:build",
+    p_payload: { build_id: buildId, asset_ids: ids },
+    p_dedupe_key: `reel:build:${buildId}`,
+  })
+  if (je) throw aviso(`No se pudo pedir el reel: ${je.message}`)
+  revalidatePath("/media")
+  return { piezas: ids.length }
 }

@@ -14,6 +14,7 @@ export type Toma = {
   foco_x: number // 0..1: hacia dónde se acerca (lo más apetitoso)
   foco_y: number
   transicion: Transicion // cómo entra (la primera siempre "corte")
+  por_que?: string // para Javier, en Aprobaciones
 }
 export type GuionReel = {
   tomas: Toma[]
@@ -21,7 +22,11 @@ export type GuionReel = {
   medio: string // texto sobre la tercera toma ("" = ninguno)
   titulo_cierre: string
   recuadro: string // "" = sin recuadro
-  musica: string | null // clave en cos-media/music/<marca>/
+  musica: string | null // nombre del archivo en cos-media/music/<marca>/
+  combo: string // nombre EXACTO de un combo de Datos vigentes ("" = ninguno)
+  idea: string // una línea: qué cuenta el reel
+  /** Precio y pie del cierre, congelados al armar el borrador (salen de Datos vigentes, nunca de la IA). */
+  cierre?: { precio: string | null; pie: string | null }
 }
 
 export const RECUADROS = ["SUSHI PREMIUM", "PRECIO INTELIGENTE", "PEDILO ONLINE", "PLAN EN CASA", "ENTRÁ Y PEDÍ", "PEDÍ ONLINE", "DELIVERY"] as const
@@ -38,10 +43,27 @@ const texto = (v: unknown, max: number) =>
   typeof v === "string" ? v.replace(/#\S+/g, "").replace(/\p{Extended_Pictographic}/gu, "").replace(/\s+/g, " ").trim().toUpperCase().slice(0, max) : ""
 
 /**
- * Deja el guion de la IA dentro de lo posible: tomas de largo razonable, dentro del video,
- * fuentes que existen, textos cortos, recuadro de la lista. Tira las tomas imposibles.
+ * Palabras que la IA propuso en las pruebas y van contra el brandbook: escasez inventada, frescura
+ * como promesa, bebida protagonista. Se comparan sin tildes. Se suman las prohibidas de la marca.
  */
-export function normalizarGuion(raw: unknown, fuentes: Fuente[], musicas: string[] = []): GuionReel {
+export const PALABRAS_FUERA = ["brindis", "vino", "cerveza", "recien hecho", "fresquisimo", "ultimos", "ultimas", "agotar", "agotado", "cupos", "stock"]
+const sinTildes = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+export function tieneProhibida(textoLibre: string, extra: string[] = []): boolean {
+  const t = ` ${sinTildes(textoLibre).replace(/[^a-z0-9ñ ]+/g, " ")} `
+  return [...PALABRAS_FUERA, ...extra.map(sinTildes)].some((p) => p.trim() && t.includes(` ${p.trim()} `))
+}
+
+/**
+ * Deja el guion de la IA dentro de lo posible: tomas de largo razonable, dentro del video,
+ * fuentes que existen, textos cortos, recuadro de la lista, combo que exista, sin palabras fuera
+ * del brandbook. Tira las tomas imposibles.
+ */
+export function normalizarGuion(
+  raw: unknown,
+  fuentes: Fuente[],
+  musicas: string[] = [],
+  opts: { combos?: string[]; prohibidas?: string[] } = {},
+): GuionReel {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
   const tomas: Toma[] = []
   for (const t of Array.isArray(r.tomas) ? (r.tomas as Record<string, unknown>[]) : []) {
@@ -64,19 +86,88 @@ export function normalizarGuion(raw: unknown, fuentes: Fuente[], musicas: string
       foco_x: clamp(num(t.foco_x, 0.5), 0.15, 0.85),
       foco_y: clamp(num(t.foco_y, 0.5), 0.15, 0.85),
       transicion: tomas.length === 0 ? "corte" : t.transicion === "fundido" ? "fundido" : "corte",
+      por_que: typeof t.por_que === "string" ? t.por_que.replace(/\s+/g, " ").trim().slice(0, 160) : "",
     })
     if (tomas.length >= 8) break
   }
   const recuadro = texto(r.recuadro, 24)
   const musica = typeof r.musica === "string" && musicas.includes(r.musica) ? r.musica : (musicas[0] ?? null)
+  // Un texto con una palabra fuera del brandbook no se corrige: se descarta.
+  const limpio = (v: unknown, max: number) => {
+    const t = texto(v, max)
+    return t && !tieneProhibida(t, opts.prohibidas) ? t : ""
+  }
+  const medio = tomas.length >= 3 ? limpio(r.medio, 28) : ""
+  const titulo = limpio(r.titulo_cierre, 24)
+  // La tapa no puede quedar vacía: si el gancho no pasa, se usa otro texto que sí pasó.
+  const gancho = limpio(r.gancho, 28) || titulo || medio
+  const combo = typeof r.combo === "string" ? (opts.combos ?? []).find((c) => sinTildes(c) === sinTildes(r.combo as string).trim()) ?? "" : ""
   return {
     tomas,
-    gancho: texto(r.gancho, 28),
-    medio: tomas.length >= 3 ? texto(r.medio, 28) : "",
-    titulo_cierre: texto(r.titulo_cierre, 24),
+    gancho,
+    medio,
+    titulo_cierre: titulo,
     recuadro: (RECUADROS as readonly string[]).includes(recuadro) ? recuadro : "",
     musica,
+    combo,
+    idea: typeof r.idea === "string" ? r.idea.replace(/\s+/g, " ").trim().slice(0, 240) : "",
   }
+}
+
+/**
+ * Guion de respaldo, sin IA (si la IA falla o no deja ninguna toma usable): 5 tomas repartidas en
+ * las fuentes, alternando movimientos. Videos: tomas dentro de sus cortes medidos (o al medio).
+ */
+export function guionPorDefecto(fuentes: (Fuente & { cortes?: number[] })[], musicas: string[] = []): GuionReel {
+  const movs: Movimiento[] = ["acercar", "paneo_derecha", "alejar", "paneo_izquierda", "acercar"]
+  const usables = fuentes.map((f, i) => ({ f, i })).filter(({ f }) => f.tipo === "foto" || (f.duracion ?? 0) >= 0.8)
+  const tomas: Toma[] = []
+  for (let n = 0; n < 5 && usables.length; n++) {
+    const { f, i } = usables[n % usables.length]
+    const vuelta = Math.floor(n / usables.length)
+    const duracion = f.tipo === "video" ? Math.min(2.4, f.duracion ?? 2.4) : 2.4
+    let trim = 0
+    if (f.tipo === "video") {
+      const total = f.duracion ?? 0
+      const inicios = [0, ...(f.cortes ?? [])].filter((c) => c + duracion <= total)
+      trim = inicios.length ? inicios[(vuelta * 2) % inicios.length] : Math.max(0, (total - duracion) / 2)
+    }
+    tomas.push({ fuente: i, trim_start: Math.round(trim * 100) / 100, duracion, movimiento: movs[n], foco_x: 0.5, foco_y: 0.5, transicion: n === 0 ? "corte" : n % 2 ? "corte" : "fundido", por_que: "Armado automático (la IA no respondió)" })
+  }
+  return { tomas, gancho: "", medio: "", titulo_cierre: "", recuadro: "", musica: musicas[0] ?? null, combo: "", idea: "" }
+}
+
+/**
+ * Precio y pie de la placa final, solo con datos reales (docs/reels/prompts.md §3):
+ * precio = el del combo del guion si está activo y tiene precio; pie = "ENVÍOS <zonas>" si es corto,
+ * si no el retiro. Nunca inventado.
+ */
+export function cierreDesdeDatos(combo: string, d: { combos: { nombre: string; precio: string; activo: boolean }[]; zonas: string; retiro: string }): { precio: string | null; pie: string | null } {
+  const c = combo ? d.combos.find((x) => x.activo && x.precio && sinTildes(x.nombre) === sinTildes(combo)) : undefined
+  const zonas = d.zonas.trim()
+  const retiro = d.retiro.trim()
+  const pie = zonas && zonas.length <= 40 ? `ENVÍOS ${zonas}` : retiro && retiro.length <= 48 ? retiro : null
+  return { precio: c?.precio.trim() || null, pie: pie ? pie.toUpperCase() : null }
+}
+
+/** Momento (ms) en que el gancho ya se ve entero: la tapa del reel en el perfil (thumb_offset). */
+export const TAPA_MS = 1200
+
+/**
+ * Todo lo que cambia el video final. Si cambia algo de esto, se rearma (lección del 29-09: la
+ * clave de la pieza tiene que incluir el diseño de la marca).
+ */
+export function firmaReel(p: { version: string; guion: GuionReel; gancho: string; musicaKey: string | null; fuentes: string[]; kitVersion: string; kitMarca: unknown }): string {
+  const { cierre, tomas, ...resto } = p.guion
+  return [
+    p.version,
+    JSON.stringify({ ...resto, tomas: tomas.map((t) => ({ ...t, por_que: undefined })), cierre: cierre ?? null }),
+    p.gancho,
+    p.musicaKey ?? "",
+    p.fuentes.join(","),
+    p.kitVersion,
+    JSON.stringify(p.kitMarca ?? null),
+  ].join("\x1f")
 }
 
 /** Cuándo empieza cada toma y el cierre (las transiciones se superponen) y cuánto dura todo. */

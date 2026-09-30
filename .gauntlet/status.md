@@ -9,3 +9,4 @@
 | F3 Historias de Turnos "para redes" → IA → aprobación | pendiente | Turnos tiene trabajo sin commitear en historias |
 | F7 Motor de gustos (música + imágenes por métricas, sugerencias, candidatos a pautar) | **M0 PASS local** 30-09 · falta migrar/deployar (OK de Javier) | 0018 + music:sync/analyze + traits:backfill + chips en Motores. Críticos: 3. Hallazgos 26-33. Backfill de rasgos listo, NO corrido. Próximo: M1 |
 | F8 Agenda automática (motor elige día+hora; aprende de Meta + feriados + clima; historias de clima; agente estratega) | SPEC · **EN PAUSA** | `features/f8-agenda/spec.md` · decisiones 30-09 cerradas · Javier suma más cosas antes de arrancar |
+| F9 Video primero (motor de reels: cocina/Usar → reel + historia + FB video; Armar reel con varias; tapa) | **PASS local** 30-09 · migración 0019 + deploy en curso | Reels reales armados en local por marca (Sensa video, Sensa 5 fotos, FF mascota, logo Biju). Críticos: 2. Hallazgos 34-39 |
