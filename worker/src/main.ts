@@ -186,6 +186,38 @@ void scheduleMusic()
 const musicClock = setInterval(() => void scheduleMusic(), 30 * 60_000)
 shutdown.signal.addEventListener("abort", () => clearInterval(musicClock), { once: true })
 
+// Agenda (F8). Cada tarea se encola con una clave por ventana de tiempo, y la tarea misma es
+// idempotente (si corre de más no rompe nada; solo cuesta un poco de cómputo):
+//   agenda:plan     cada hora (sin IA); el agente (IA) una vez por día, a las 7 de Buenos Aires
+//   clima:stories   cada 3 horas
+//   agenda:learn    una vez por día
+//   agenda:context  una vez por día (clima histórico y feriados de lo publicado)
+function agendaClock() {
+  if (shutdown.signal.aborted) return
+  const ahora = Date.now()
+  const horaBA = new Date(ahora - 3 * 3600_000).getUTCHours()
+  const hora = Math.floor(ahora / 3600_000)
+  const dia = Math.floor((ahora - 3 * 3600_000) / 86_400_000)
+  const pedir = (tipo: string, payload: Record<string, unknown>, clave: string) =>
+    queue.enqueue(tipo, payload, { dedupeKey: clave }).catch((e) => log(`no pude encolar ${tipo}`, { error: String(e) }))
+  void pedir("agenda:plan", { agente: horaBA === 7 }, `agenda:plan:${hora}`)
+  if (hora % 3 === 0) void pedir("clima:stories", {}, `clima:stories:${hora}`)
+  if (horaBA === 5) {
+    void pedir("agenda:context", {}, `agenda:context:${dia}`)
+    void pedir("agenda:learn", {}, `agenda:learn:${dia}`)
+  }
+}
+// Al arrancar: contexto y modelo si nunca se hicieron (una sola vez por día).
+void queue.enqueue("agenda:context", {}, { dedupeKey: `agenda:context:boot:${Math.floor(Date.now() / 86_400_000)}` }).catch(() => {})
+// Primer tic al comienzo de la próxima hora; después, cada hora.
+const alaHora = 3600_000 - (Date.now() % 3600_000) + 30_000
+const agendaStart = setTimeout(() => {
+  agendaClock()
+  const t = setInterval(agendaClock, 3600_000)
+  shutdown.signal.addEventListener("abort", () => clearInterval(t), { once: true })
+}, alaHora)
+shutdown.signal.addEventListener("abort", () => clearTimeout(agendaStart), { once: true })
+
 // Historias de Turnos "para redes" (F3): cada 3 minutos, solo si está configurado.
 import("./turnos.ts").then(({ turnosConfig }) => {
   if (!turnosConfig()) return log("Turnos no configurado (TURNOS_API_URL / CONTENT_OS_SECRET): historias apagadas")

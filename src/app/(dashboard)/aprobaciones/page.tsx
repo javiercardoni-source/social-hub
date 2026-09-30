@@ -29,6 +29,10 @@ type RawPost = {
   first_render_at: string | null
   campaign: string | null
   montaje: (GuionReel & { respaldo?: boolean }) | null
+  window_start: string | null
+  schedule_source: string | null
+  schedule_reason: string | null
+  schedule_lock: boolean
   cos_brands: { name: string; color: string; slug: string } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
@@ -66,7 +70,7 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock,
       cos_brands(name, color, slug),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -165,6 +169,11 @@ export default async function AprobacionesPage() {
         confianza: x.confianza,
       })),
       template: p.template,
+      // Horario que eligió la agenda (F8): se aprueba con su ventana.
+      motor:
+        p.scheduled_at && p.window_start && !p.schedule_lock && ["motor", "exploracion", "fijo"].includes(p.schedule_source ?? "")
+          ? { at: p.scheduled_at, porque: p.schedule_reason ?? "", prueba: p.schedule_source === "exploracion", fijo: p.schedule_source === "fijo" }
+          : null,
       // Reel armado por el motor (F9): lo que Javier necesita para entender la elección.
       reel: p.montaje
         ? {

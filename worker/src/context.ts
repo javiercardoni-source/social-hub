@@ -12,7 +12,7 @@ export const arDay = (d: Date) => new Date(d.getTime() - 3 * 3600_000).toISOStri
 type DayRow = { day: string; name: string; kind: string; brand_id: string | null; source: string; hint: string | null }
 
 /** Inserta lo que falte (la clave natural es fecha + nombre + marca). Idempotente. */
-async function insertMissing(db: SupabaseClient, rows: DayRow[]) {
+export async function insertMissing(db: SupabaseClient, rows: DayRow[]) {
   if (!rows.length) return 0
   const days = [...new Set(rows.map((r) => r.day))]
   const { data: existing, error } = await db.from("cos_special_days").select("day, name, brand_id").in("day", days)
@@ -50,9 +50,9 @@ export async function syncContext(db: SupabaseClient) {
     [...specialDaysFor(year), ...specialDaysFor(year + 1)].map((d) => ({ day: d.day, name: d.name, kind: "especial", brand_id: null, source: "curado", hint: d.hint })),
   )
 
-  // Clima de Buenos Aires, 7 días.
+  // Clima de Buenos Aires, 14 días (la agenda mira dos semanas).
   const w = await fetch(
-    "https://api.open-meteo.com/v1/forecast?latitude=-34.61&longitude=-58.38&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=America%2FArgentina%2FBuenos_Aires&forecast_days=7",
+    "https://api.open-meteo.com/v1/forecast?latitude=-34.61&longitude=-58.38&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=America%2FArgentina%2FBuenos_Aires&forecast_days=14",
   )
   if (!w.ok) throw new Error(`clima: HTTP ${w.status}`)
   const d = ((await w.json()) as { daily: { time: string[]; weather_code: number[]; temperature_2m_max: number[]; temperature_2m_min: number[]; precipitation_probability_max: (number | null)[] } }).daily
@@ -66,7 +66,22 @@ export async function syncContext(db: SupabaseClient) {
   }))
   const { error } = await db.from("cos_weather_daily").upsert(rows, { onConflict: "day" })
   if (error) throw new Error(`cos_weather_daily: ${error.message}`)
-  return { feriados, especiales, clima: rows.length }
+
+  // Por hora, 14 días (F8: la agenda elige la hora mirando cuándo llueve). No pisa el histórico.
+  const wh = await fetch(
+    "https://api.open-meteo.com/v1/forecast?latitude=-34.61&longitude=-58.38&hourly=weather_code,temperature_2m,precipitation,precipitation_probability&timezone=UTC&forecast_days=14",
+  )
+  if (!wh.ok) throw new Error(`clima por hora: HTTP ${wh.status}`)
+  const h = ((await wh.json()) as { hourly: { time: string[]; weather_code: (number | null)[]; temperature_2m: (number | null)[]; precipitation: (number | null)[]; precipitation_probability: (number | null)[] } }).hourly
+  const ahora = Date.now() - 3600_000
+  const horas = h.time
+    .map((t, i) => ({ ts: `${t}:00Z`, code: h.weather_code[i], temp: h.temperature_2m[i], precip_mm: h.precipitation[i], precip_prob: h.precipitation_probability[i], source: "forecast", updated_at: new Date().toISOString() }))
+    .filter((r) => Date.parse(r.ts) >= ahora)
+  for (let i = 0; i < horas.length; i += 500) {
+    const { error: he } = await db.from("cos_weather_hourly").upsert(horas.slice(i, i + 500), { onConflict: "ts" })
+    if (he) throw new Error(`cos_weather_hourly: ${he.message}`)
+  }
+  return { feriados, especiales, clima: rows.length, climaPorHora: horas.length }
 }
 
 /**

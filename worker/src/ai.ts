@@ -503,3 +503,116 @@ export async function planReel(opts: {
   if (!response.parsed_output) throw new Error(`la IA no devolvió un guion válido (stop: ${response.stop_reason})`)
   return response.parsed_output
 }
+
+// ── F8 · Agenda ─────────────────────────────────────────────────────────────
+
+/** Frase corta de una historia de clima (consignas en worker/src/agenda.ts). */
+export async function writeClimaPhrase(opts: { db: SupabaseClient; model: string; brand: BrandContext; consigna: string }): Promise<string> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content:
+          "Escribí la frase de una historia de Instagram sobre el clima de hoy.\n" +
+          `Consigna: ${opts.consigna}\n` +
+          "Reglas: castellano rioplatense y en la voz de la marca; nunca prometas tiempos de entrega ni rapidez; " +
+          "no inventes horarios, promos ni precios; máximo 60 caracteres.",
+      },
+    ],
+    output_config: { format: zodOutputFormat(FraseFeriado) },
+  })
+  await logUsage(opts.db, { purpose: "clima:frase", model: opts.model, usage: response.usage })
+  const frase = response.parsed_output?.frase.replace(/#\S+/g, "").replace(/\p{Extended_Pictographic}/gu, "").replace(/\s{2,}/g, " ").trim()
+  if (!frase) throw new Error(`la IA no devolvió la frase (stop: ${response.stop_reason})`)
+  return frase.slice(0, 60)
+}
+
+export const PlanSemana = z.object({
+  nota: z.string().describe("Tres a cinco líneas para Javier: cómo viene la semana (clima, feriados, fechas) y qué ajustaste y por qué"),
+  cambios: z
+    .array(
+      z.object({
+        post_id: z.string(),
+        at: z.string().describe("Nueva fecha y hora en ISO con zona de Buenos Aires, ej. 2026-10-08T19:30:00-03:00"),
+        porque: z.string().describe("Una línea: por qué este horario es mejor (dato concreto)"),
+      }),
+    )
+    .describe("Solo los cambios que valen la pena. Vacío si el plan del motor ya está bien."),
+})
+
+/**
+ * El agente de la agenda: mira el plan del motor con el contexto de la semana y propone ajustes.
+ * Propone, no decide: el código valida cada cambio con las mismas reglas del motor.
+ */
+export async function planearSemana(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  plan: { post_id: string; formato: string; at: string; porque: string; fijo: boolean }[]
+  efectos: { factor: string; efecto: number; n: number; confianza: string }[]
+  clima: { dia: string; tarde: string | null; noche: string | null }[]
+  fechas: { dia: string; nombre: string; tipo: string }[]
+  apertura: unknown
+}): Promise<z.infer<typeof PlanSemana>> {
+  const texto = [
+    `Sos el estratega de la agenda de publicaciones de ${opts.brand.name}. El motor ya ubicó cada pieza en el mejor horario según las métricas.`,
+    "Tu trabajo: revisar el plan con el contexto de la semana y proponer SOLO ajustes que tengan un motivo concreto",
+    "(una fecha especial, lluvia justo antes de la cena, dos piezas parecidas muy juntas, un feriado). No inventes datos.",
+    "Reglas que el código va a verificar (si no las cumplís, el cambio se descarta): de 9 a 22 h, solo días que abre la marca,",
+    "máximo 1 post (feed/reel/carrusel) por día por cuenta y 4 h entre sí, historias con 90 min entre sí y hasta 5 por día,",
+    "las piezas con día fijo no cambian de día, nada a menos de 2 h de ahora.",
+    "",
+    `Ahora: ${new Date().toISOString()}`,
+    `Plan del motor:\n${opts.plan.map((p) => `- ${p.post_id} · ${p.formato}${p.fijo ? " (día fijo)" : ""} · ${p.at} · ${p.porque}`).join("\n")}`,
+    `Lo que aprendió de las métricas (solo efectos claros): ${opts.efectos.length ? opts.efectos.map((e) => `${e.factor} ×${e.efecto} (n=${e.n}, ${e.confianza})`).join("; ") : "ninguno claro todavía"}`,
+    `Clima de los próximos días (tarde / noche): ${opts.clima.map((c) => `${c.dia}: ${c.tarde ?? "?"} / ${c.noche ?? "?"}`).join("; ")}`,
+    `Fechas: ${opts.fechas.length ? opts.fechas.map((f) => `${f.dia} ${f.nombre} (${f.tipo})`).join("; ") : "ninguna"}`,
+    `Horarios de apertura: ${opts.apertura ? JSON.stringify(opts.apertura) : "sin confirmar"}`,
+  ].join("\n")
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 6000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: texto }],
+    output_config: { format: zodOutputFormat(PlanSemana) },
+  })
+  await logUsage(opts.db, { purpose: "agenda:plan", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió el plan (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}
+
+export const HorariosWeb = z.object({
+  dias: z
+    .array(
+      z.object({
+        dia: z.number().int().describe("0 = domingo, 1 = lunes … 6 = sábado"),
+        turnos: z.array(z.object({ desde: z.string().describe("HH:MM"), hasta: z.string().describe("HH:MM (24:00 si cierra a medianoche)") })),
+      }),
+    )
+    .describe("Un elemento por cada día que abre, con sus turnos. Los días que no abre no van."),
+  dudas: z.string().describe("Si algo no está claro o las fuentes se contradicen, decilo en una línea. Vacío si está todo claro."),
+})
+
+/** Horarios de apertura a partir del texto de la web (y lo cargado a mano). Javier los confirma. */
+export async function leerHorarios(opts: { db: SupabaseClient; model: string; marca: string; textos: string[] }): Promise<z.infer<typeof HorariosWeb>> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 3000,
+    messages: [
+      {
+        role: "user",
+        content:
+          `Sacá los horarios de atención/pedidos de ${opts.marca} de estas fuentes. Solo lo que esté escrito: no supongas. ` +
+          "Si hay horarios de delivery y de local distintos, usá los de pedidos/delivery.\n\n" +
+          opts.textos.join("\n\n---\n\n"),
+      },
+    ],
+    output_config: { format: zodOutputFormat(HorariosWeb) },
+  })
+  await logUsage(opts.db, { purpose: "brand:hours", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió horarios (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}

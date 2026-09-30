@@ -6,6 +6,7 @@ import { BRAND_MODULES } from "../../../../shared/cos/brand-modules"
 import { normalizarDatos } from "../../../../shared/cos/datos-vigentes"
 import { signedUrls } from "@/lib/cos/storage"
 import { normalizarEtiquetas, tituloTema } from "../../../../shared/cos/gustos"
+import { normalizarApertura } from "../../../../shared/cos/agenda"
 import type { Insumo, Tema } from "./motores"
 import { MarcaClient, type ModuloEstado } from "./marca-client"
 
@@ -31,7 +32,7 @@ export default async function MarcaPage() {
   const db = createAdminClient()
   const [{ data: rows, error }, { data: b }] = await Promise.all([
     db.from("cos_brand_interviews").select("module, messages, summary_md, status").eq("brand_id", brand.id),
-    db.from("cos_brands").select("brandbook_md, brandbook_status, brandbook_approved_at, datos_vigentes, datos_vigentes_at").eq("id", brand.id).single(),
+    db.from("cos_brands").select("brandbook_md, brandbook_status, brandbook_approved_at, datos_vigentes, datos_vigentes_at, agenda_auto, clima_historias, open_hours, open_hours_propuesta, open_hours_fuente, open_hours_at").eq("id", brand.id).single(),
   ])
   if (error) throw new Error(`No se pudo cargar la entrevista: ${error.message}`)
 
@@ -108,6 +109,14 @@ export default async function MarcaPage() {
           datosAt={b?.datos_vigentes_at ?? null}
           insumos={insumos}
           musica={musica}
+          agenda={{
+            auto: !!b?.agenda_auto,
+            climaHistorias: b?.clima_historias !== false,
+            horarios: normalizarApertura(b?.open_hours),
+            propuesta: normalizarApertura(b?.open_hours_propuesta),
+            fuente: b?.open_hours_fuente ?? null,
+            leidoAt: b?.open_hours_at ?? null,
+          }}
         />
       </div>
     </>

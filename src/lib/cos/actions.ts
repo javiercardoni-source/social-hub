@@ -132,12 +132,33 @@ export async function editarPost(
 }
 
 /**
- * Aprueba. `cuando` = fecha ISO para programarlo, o null para "apenas apruebe".
+ * Aprueba. `cuando`:
+ *   "motor" → sale en el horario que eligió la agenda (F8) y se aprueba su ventana: el motor lo
+ *             puede reacomodar dentro de ella si cambia el pronóstico (nunca a menos de 3 h).
+ *   fecha   → a esa hora exacta, fijada a mano (🔒: el motor no la toca).
+ *   null    → apenas apruebe.
  * La fecha se fija ANTES de aprobar porque entra en el hash de lo aprobado.
  */
-export async function aprobarPost(postId: string, cuando: string | null = null) {
+export async function aprobarPost(postId: string, cuando: string | null | "motor" = null, vistoAt?: string) {
   const member = await requireMember("approver")
   const db = createAdminClient()
+
+  if (cuando === "motor") {
+    const { data: p } = await db.from("cos_posts").select("render_qa, scheduled_at, window_start, schedule_source, schedule_lock").eq("id", postId).single()
+    if (!p?.render_qa) throw aviso("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
+    if (!p.scheduled_at || !p.window_start || p.schedule_lock || !["motor", "exploracion", "fijo"].includes(p.schedule_source ?? "")) {
+      throw aviso("Este post no tiene horario de la agenda: elegí «Apenas apruebe» u «Otro horario».")
+    }
+    if (new Date(p.scheduled_at).getTime() <= Date.now() + 2 * 60_000) throw aviso("El horario de la agenda ya pasó: elegí otro.")
+    // Se aprueba la hora que se vio: si la agenda la cambió mientras tanto, se avisa.
+    if (!vistoAt || new Date(vistoAt).getTime() !== new Date(p.scheduled_at).getTime()) {
+      throw aviso("La agenda acaba de cambiar el horario de este post: recargá la página para ver el nuevo antes de aprobar.")
+    }
+    await sellarYProgramar(db, postId, member.userId, p.scheduled_at)
+    revalidatePath("/aprobaciones")
+    revalidatePath("/inicio")
+    return
+  }
 
   const target = cuando ? new Date(cuando) : null
   if (target && Number.isNaN(target.getTime())) throw aviso("Fecha inválida")
@@ -149,26 +170,22 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
   // "Ya" (o una fecha que está encima) se deja 2 min adelante para que el reloj no lo dé
   // por vencido mientras se aprueba; igual se encola ya mismo (abajo).
   const publishNow = !target || target.getTime() <= Date.now() + 2 * 60_000
+  // Hora elegida a mano: queda fijada (🔒) y sin ventana; la agenda no la mueve.
   const { error: fe } = await db
     .from("cos_posts")
-    .update({ scheduled_at: publishNow ? new Date(Date.now() + 2 * 60_000).toISOString() : target!.toISOString() })
+    .update({
+      scheduled_at: publishNow ? new Date(Date.now() + 2 * 60_000).toISOString() : target!.toISOString(),
+      schedule_lock: true,
+      schedule_source: "manual",
+      window_start: null,
+      window_end: null,
+      schedule_reason: publishNow ? "Apenas se aprobó" : "Horario elegido a mano",
+    })
     .eq("id", postId)
     .eq("status", "PENDING_APPROVAL")
   if (fe) throw aviso(`No se pudo fijar el horario: ${fe.message}`)
 
-  // PENDING_APPROVAL → APPROVED (sella el hash en la base)
-  const { error: ae } = await db
-    .from("cos_posts")
-    .update({ status: "APPROVED", approved_by: member.userId, approved_at: new Date().toISOString() })
-    .eq("id", postId)
-  if (ae) throw aviso(`No se pudo aprobar: ${ae.message}`)
-
-  // APPROVED → SCHEDULED (el worker lo publica en scheduled_at)
-  const { error: se } = await db
-    .from("cos_posts")
-    .update({ status: "SCHEDULED" })
-    .eq("id", postId)
-  if (se) throw aviso(`No se pudo programar: ${se.message}`)
+  await sellarYProgramar(db, postId, member.userId)
 
   if (publishNow) {
     // Misma clave que usa el reloj: si él también lo encola, no se duplica.
@@ -182,6 +199,21 @@ export async function aprobarPost(postId: string, cuando: string | null = null) 
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
+}
+
+/** PENDING_APPROVAL → APPROVED (la base sella el hash) → SCHEDULED (el worker lo publica en su hora). */
+async function sellarYProgramar(db: ReturnType<typeof createAdminClient>, postId: string, userId: string, horaVista?: string) {
+  let q = db
+    .from("cos_posts")
+    .update({ status: "APPROVED", approved_by: userId, approved_at: new Date().toISOString() })
+    .eq("id", postId)
+  // Con horario de la agenda: solo si sigue siendo el que se vio (la agenda corre en paralelo).
+  if (horaVista) q = q.eq("scheduled_at", horaVista)
+  const { data: ok, error: ae } = await q.select("id")
+  if (ae) throw aviso(`No se pudo aprobar: ${ae.message}`)
+  if (!ok?.length) throw aviso("La agenda acaba de cambiar el horario: recargá la página para verlo antes de aprobar.")
+  const { error: se } = await db.from("cos_posts").update({ status: "SCHEDULED" }).eq("id", postId)
+  if (se) throw aviso(`No se pudo programar: ${se.message}`)
 }
 
 // ── rechazar post ────────────────────────────────────────────────────────────
@@ -224,7 +256,8 @@ export async function volverAAprobacion(postId: string) {
   const db = createAdminClient()
   const { data, error } = await db
     .from("cos_posts")
-    .update({ status: "PENDING_APPROVAL", scheduled_at: null })
+    // Vuelve sin horario ni candado: se elige de nuevo al aprobar (o lo ubica la agenda).
+    .update({ status: "PENDING_APPROVAL", scheduled_at: null, window_start: null, window_end: null, schedule_lock: false, schedule_source: null, schedule_reason: null })
     .eq("id", postId)
     .in("status", ["FAILED", "MISSED", "EXPIRED", "SCHEDULED", "RETRY_SCHEDULED", "PAUSED"])
     .select("id")

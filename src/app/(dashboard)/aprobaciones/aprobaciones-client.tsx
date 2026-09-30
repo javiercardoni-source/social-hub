@@ -27,6 +27,8 @@ export type PostItem = {
   qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
   suggestions: { at: string; label: string; lift: string; up: boolean; confianza: string }[]
   template: string
+  /** Horario elegido por la agenda (F8). null = sin agenda (se elige al aprobar). */
+  motor: { at: string; porque: string; prueba: boolean; fijo: boolean } | null
   /** Reel armado por el motor desde un guion (F9). null = pieza con plantilla. */
   reel: { idea: string; segundos: number; tomas: { porQue: string; segundos: number; fuente: number }[]; fuentes: number; respaldo: boolean; precio: string | null } | null
   renderUrl: string | null
@@ -224,17 +226,19 @@ function GrupoCard({ g }: { g: Grupo }) {
       ]),
     ),
   )
+  // Con la agenda prendida, cada formato ya trae su horario: aprobar = sale ahí (F8).
   // Lo que ya viene con horario propuesto (historias de feriado) arranca programado para ese momento:
   // un clic distraído en «Aprobar» no lo publica días antes.
+  const conMotor = g.posts.every((x) => !!x.motor)
   const [inicial] = useState(() => {
     const ahora = Date.now()
     const propuesto = g.posts.find((x) => x.scheduledAt && new Date(x.scheduledAt).getTime() > ahora)?.scheduledAt
     return {
-      cuando: (propuesto ? "programar" : "ya") as "ya" | "programar",
+      cuando: (conMotor ? "motor" : propuesto ? "programar" : "ya") as "motor" | "ya" | "programar",
       fecha: toLocalInput(propuesto ? new Date(propuesto) : new Date(ahora + 24 * 3600_000)),
     }
   })
-  const [cuando, setCuando] = useState<"ya" | "programar">(inicial.cuando)
+  const [cuando, setCuando] = useState<"motor" | "ya" | "programar">(inicial.cuando)
   const [fecha, setFecha] = useState(inicial.fecha)
   const [error, setError] = useState<string | null>(null)
   const [pending, start] = useTransition()
@@ -281,7 +285,7 @@ function GrupoCard({ g }: { g: Grupo }) {
     })
   }
 
-  const scheduled = () => (cuando === "ya" ? null : new Date(fecha).toISOString())
+  const scheduled = (): string | null | "motor" => (cuando === "motor" ? "motor" : cuando === "ya" ? null : new Date(fecha).toISOString())
 
   async function aprobar(ids: string[]) {
     // Si la IA marcó que alguna pieza tapa algo, se pide confirmación (la decisión es de Javier).
@@ -291,7 +295,7 @@ function GrupoCard({ g }: { g: Grupo }) {
       const tx = textos[id]
       const orig = g.posts.find((x) => x.id === id)!
       if (changed(orig)) await editarPost(id, tx.caption, tx.hashtags, tx.overlay, tx.template, tx.music, tx.position)
-      await aprobarPost(id, scheduled())
+      await aprobarPost(id, scheduled(), orig.motor?.at)
       setResuelto((r) => ({ ...r, [id]: "aprobado" }))
     }
     const next = g.posts.find((x) => !ids.includes(x.id) && !resuelto[x.id])
@@ -303,7 +307,7 @@ function GrupoCard({ g }: { g: Grupo }) {
     return (
       <Card className="flex items-center gap-2 p-4 text-sm text-emerald-700">
         <CheckCircle className="h-4 w-4" />
-        {n ? `${n} aprobada${n > 1 ? "s" : ""}: ${cuando === "ya" ? "salen en uno o dos minutos" : "quedan programadas"}. Seguilas en Calendario.` : "Rechazado."}
+        {n ? `${n} aprobada${n > 1 ? "s" : ""}: ${cuando === "ya" ? "salen en uno o dos minutos" : cuando === "motor" ? "salen en el horario de la agenda" : "quedan programadas"}. Seguilas en Calendario.` : "Rechazado."}
       </Card>
     )
   }
@@ -550,6 +554,15 @@ function GrupoCard({ g }: { g: Grupo }) {
           {/* Cuándo */}
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Cuándo</span>
+            {conMotor && (
+              <button
+                type="button"
+                onClick={() => setCuando("motor")}
+                className={cn("rounded-full border px-3 py-1 text-xs font-semibold", cuando === "motor" && "border-primary bg-primary/10 text-primary")}
+              >
+                Horario de la agenda
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setCuando("ya")}
@@ -562,9 +575,22 @@ function GrupoCard({ g }: { g: Grupo }) {
               onClick={() => setCuando("programar")}
               className={cn("rounded-full border px-3 py-1 text-xs font-semibold", cuando === "programar" && "border-primary bg-primary/10 text-primary")}
             >
-              Programar
+              {conMotor ? "Elegir a mano 🔒" : "Programar"}
             </button>
-            {p.suggestions.length > 0 && !resuelto[p.id] && (
+            {cuando === "motor" && p.motor && (
+              <p className="w-full rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs">
+                {p.motor.prueba ? "🧪" : p.motor.fijo ? "📌" : "⚙️"}{" "}
+                <b className="capitalize">{new Date(p.motor.at).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", weekday: "long", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}</b>
+                {p.motor.porque ? ` · ${p.motor.porque.split(" · ").slice(2).join(" · ") || p.motor.porque}` : ""}
+                {g.posts.length > 1 && <span className="text-muted-foreground"> · cada formato sale en su horario</span>}
+                <span className="block text-muted-foreground">
+                  {p.motor.fijo
+                    ? "Si cambia el pronóstico, la agenda lo puede mover a otra hora de ese mismo día (nunca a menos de 3 h)."
+                    : "Si cambia el pronóstico, la agenda lo puede mover a otra hora de ese día o del siguiente (nunca a menos de 3 h). «Elegir a mano» lo deja fijo."}
+                </span>
+              </p>
+            )}
+            {cuando !== "motor" && p.suggestions.length > 0 && !resuelto[p.id] && (
               <div className="flex w-full flex-wrap items-center gap-1.5">
                 <span className="text-[11px] text-muted-foreground">Mejores horarios según tus métricas:</span>
                 {p.suggestions.map((sg) => (

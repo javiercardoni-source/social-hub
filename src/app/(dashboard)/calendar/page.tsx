@@ -31,6 +31,10 @@ type PostRow = {
   deleted_at: string | null
   delete_requested_at: string | null
   delete_error: string | null
+  schedule_source: string | null
+  schedule_lock: boolean
+  schedule_reason: string | null
+  schedule_log: { de: string; a: string; porque: string; cuando: string }[] | null
   cos_brands: { name: string; color: string } | null
   cos_post_media: { position: number; cos_asset_versions: { cos_assets: { thumb_key: string | null } | null } | null }[]
 }
@@ -63,7 +67,7 @@ export default async function CalendarioPage() {
     .from("cos_posts")
     .select(
       `id, caption, platform, post_type, status, scheduled_at, published_at, permalink, last_error, attempts,
-       deleted_at, delete_requested_at, delete_error,
+       deleted_at, delete_requested_at, delete_error, schedule_source, schedule_lock, schedule_reason, schedule_log,
        cos_brands(name, color),
        cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(thumb_key)))`,
     )
@@ -88,6 +92,24 @@ export default async function CalendarioPage() {
 
   const thumbOf = (p: PostRow) => p.cos_post_media.find((m) => m.position === 0)?.cos_asset_versions?.cos_assets?.thumb_key ?? null
   const thumbs = await signedUrls(rows.map(thumbOf).filter(Boolean) as string[])
+
+  // F8: de dónde salió el horario.
+  const origen = (p: PostRow) =>
+    p.schedule_lock || p.schedule_source === "manual"
+      ? { label: "🔒 a mano", title: "Horario fijado a mano: la agenda no lo mueve" }
+      : p.schedule_source === "exploracion"
+        ? { label: "🧪 prueba", title: "Horario con poca historia: se prueba para seguir aprendiendo" }
+        : p.schedule_source === "motor"
+          ? { label: "⚙️ agenda", title: "Horario elegido por la agenda según tus métricas" }
+          : p.schedule_source === "fijo"
+            ? { label: "📌 día fijo", title: "Feriado o clima: el día es fijo" }
+            : null
+
+  // Plan de la semana del agente (F8), de la marca elegida.
+  const { data: planes } = brand
+    ? await db.from("cos_agenda_plans").select("nota, agente, created_at").eq("brand_id", brand.id).not("nota", "is", null).order("created_at", { ascending: false }).limit(1)
+    : { data: [] }
+  const plan = planes?.[0] as { nota: string; agente: string; created_at: string } | undefined
 
   const upcoming = rows.filter((p) => ["SCHEDULED", "APPROVED", "PUBLISHING", "RETRY_SCHEDULED", "PAUSED"].includes(p.status)).reverse()
   const problems = rows.filter((p) => ["FAILED", "MISSED", "EXPIRED"].includes(p.status))
@@ -133,8 +155,21 @@ export default async function CalendarioPage() {
                     <span className="text-[11px] text-muted-foreground">
                       · {p.status === "PUBLISHED" ? when(p.published_at) : when(p.scheduled_at)}
                     </span>
+                    {origen(p) && (
+                      <span title={origen(p)!.title} className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {origen(p)!.label}
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 truncate text-sm">{p.caption || (p.post_type === "story" ? "Historia (sin texto)" : "(sin texto)")}</p>
+                  {p.schedule_reason && p.status !== "PUBLISHED" && p.schedule_source !== "manual" && (
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{p.schedule_reason}</p>
+                  )}
+                  {!!p.schedule_log?.length && p.status !== "PUBLISHED" && (
+                    <p className="mt-0.5 text-[11px] text-sky-700">
+                      Movido por la agenda: antes {when(p.schedule_log[p.schedule_log.length - 1].de)}
+                    </p>
+                  )}
                   {p.deleted_at && <p className="mt-1 text-xs font-medium text-muted-foreground">Borrado de la red el {when(p.deleted_at)}</p>}
                   {p.delete_error && !p.deleted_at && <p className="mt-1 text-xs text-red-600">{p.delete_error}</p>}
                   {p.last_error && p.status !== "PUBLISHED" && (
@@ -180,6 +215,16 @@ export default async function CalendarioPage() {
         description={`${upcoming.length} por salir · ${published.length} publicados${problems.length ? ` · ${problems.length} con problemas` : ""}${brand ? ` · ${brand.name}` : ""}`}
       />
       <div className="space-y-8 p-4 md:p-6">
+        {plan && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">Plan de la semana</h2>
+            <div className="whitespace-pre-line rounded-xl border bg-card px-4 py-3 text-sm">
+              {plan.nota}
+              <p className="mt-2 text-[11px] text-muted-foreground">Agenda · {when(plan.created_at)}</p>
+            </div>
+          </section>
+        )}
+
         {(clima?.length ?? 0) > 0 && (
           <section className="space-y-2">
             <h2 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">Clima en Buenos Aires</h2>

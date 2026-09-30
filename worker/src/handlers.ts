@@ -52,6 +52,7 @@ import { openDays } from "../../shared/cos/timing.ts"
 import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
 import { TRAITS_VERSION, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
 import { gustosHandlers } from "./gustos.ts"
+import { agendaHandlers } from "./agenda.ts"
 import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
 import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
 
@@ -86,14 +87,14 @@ async function must<T>(p: PromiseLike<{ data: T | null; error: { message: string
   return data
 }
 
-async function settings(db: SupabaseClient) {
+export async function settings(db: SupabaseClient) {
   return must(
     db.from("cos_settings").select("publish_mode, storage_driver, global_pause, ai_model, ai_model_light, foto_fija").eq("id", true).single(),
     "configuración",
   ) as Promise<{ publish_mode: "simulated" | "live"; storage_driver: string; global_pause: boolean; ai_model: string; ai_model_light: string; foto_fija: boolean }>
 }
 
-async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
+export async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
   const b = (await must(
     db.from("cos_brands").select("name, slug, tone_md, rules_json, datos_vigentes").eq("id", brandId).single(),
     "marca",
@@ -407,6 +408,7 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     actor: "worker",
     details_json: { formats: created, rationale: c.rationale },
   })
+  await pedirAgenda(db, queue, a.brand_id)
   log("borradores listos para aprobar", { asset: a.id, formats: created })
 }
 
@@ -526,6 +528,7 @@ async function borradoresReel(
     await queue.enqueue("post:render", { post_id: post.id }, { dedupeKey: `render:${post.id}` })
     created.push(`${f.platform}:${f.post_type}`)
   }
+  await pedirAgenda(db, queue, o.brandId)
   await db.from("cos_audit_log").insert({
     event: "post:drafted",
     entity_type: "asset",
@@ -573,8 +576,14 @@ const buildReel: Handler = async (job, ctx) => {
   log("reel armado con varias piezas", { build: buildId, piezas: assets.length, formats: creados })
 }
 
+/** Si la marca tiene la agenda prendida, le pide al motor que ubique lo nuevo (en unos segundos). */
+async function pedirAgenda(db: SupabaseClient, queue: Queue, brandId: string) {
+  const { data } = await db.from("cos_brands").select("agenda_auto").eq("id", brandId).single()
+  if (data?.agenda_auto) await queue.enqueue("agenda:plan", { brand_id: brandId }, { runAt: new Date(Date.now() + 20_000), dedupeKey: `agenda:plan:${brandId}:${Math.floor(Date.now() / 300_000)}` })
+}
+
 // ── biblioteca de música (cos-media/music/<marca>/, la carga scripts/musica-subir.mjs) ──
-async function listMusic(db: SupabaseClient, slug: string): Promise<string[]> {
+export async function listMusic(db: SupabaseClient, slug: string): Promise<string[]> {
   const { data } = await db.storage.from(MEDIA_BUCKET).list(`music/${slug}`, { limit: 100 })
   return (data ?? []).filter((f) => /\.(mp3|m4a|wav|aac)$/i.test(f.name)).map((f) => `music/${slug}/${f.name}`)
 }
@@ -1066,7 +1075,7 @@ const syncContextJob: Handler = async (_job, { db, queue, log }) => {
 const FONDO_PLACA: Record<string, string> = { fasutofudo: "#1C1917", bijutsukan: "#0A0A0A", sensaciones: "#111111" }
 
 /** Placa de fondo de la marca, como archivo del sistema. null si todavía se está preparando. */
-async function placaDeMarca(db: SupabaseClient, queue: Queue, brand: { id: string; slug: string }): Promise<string | null> {
+export async function placaDeMarca(db: SupabaseClient, queue: Queue, brand: { id: string; slug: string }): Promise<string | null> {
   const ext = `placa:${brand.slug}`
   const { data: ya } = await db.from("cos_assets").select("id, status, current_version_id").eq("source", "sistema").eq("source_external_id", ext).maybeSingle()
   if (ya) return ["READY", "IN_USE"].includes(ya.status) ? ya.current_version_id : null
@@ -1178,6 +1187,11 @@ const holidayStories: Handler = async (_job, { db, queue, log }) => {
             music_key: music.length ? music[Math.floor(Math.random() * music.length)] : null,
             campaign,
             scheduled_at: horaBA(diasAntesDe(d.day, h.diasAntes), h.hora),
+            // F8: el día es fijo; con la agenda prendida, el motor elige la hora dentro del día.
+            window_start: horaBA(diasAntesDe(d.day, h.diasAntes), "09:00"),
+            window_end: horaBA(diasAntesDe(d.day, h.diasAntes), "22:00"),
+            schedule_source: "fijo",
+            schedule_reason: "Día fijo del feriado",
             status: "DRAFT",
           })
           .select("id")
@@ -1713,4 +1727,5 @@ export const handlers: Record<string, Handler> = {
   "accounts:check": checkAccounts,
   ...gustosHandlers,
   "reel:build": buildReel,
+  ...agendaHandlers,
 }

@@ -104,6 +104,36 @@ export default async function MetricasPage() {
       })
     : []
 
+  // F8 · Qué aprendió la agenda (última foto del modelo de la cuenta de Instagram de la marca).
+  const FACTOR: Record<string, string> = { feriado: "Feriado", lluvia: "Lluvia", tormenta: "Tormenta", frio: "Frío", calor: "Calor", soleado: "Día soleado", nublado: "Nublado" }
+  type EfectoRow = { factor: string; efecto: number; n: number; lo: number; hi: number; confianza: string; claro: boolean }
+  const { data: fotoModelo } = brandAcc
+    ? await db.from("cos_slot_models").select("format, n, model_json, computed_at").eq("account_id", brandAcc.id).order("computed_at", { ascending: false }).limit(6)
+    : { data: [] }
+  const modeloReciente = (fotoModelo ?? []).sort((a, b) => b.n - a.n)[0] as { format: string; n: number; model_json: { efectos: EfectoRow[]; peso: number }; computed_at: string } | undefined
+
+  // F8 · ¿Acierta? Lo que predijo la agenda contra lo que rindió (a las 48 h o más).
+  const { data: predichos } = brand
+    ? await db
+        .from("cos_posts")
+        .select("id, predicted_lift, published_at, post_type, schedule_source")
+        .eq("brand_id", brand.id)
+        .eq("status", "PUBLISHED")
+        .not("predicted_lift", "is", null)
+        .lt("published_at", new Date(nowMs - 48 * 3600_000).toISOString())
+        .order("published_at", { ascending: false })
+        .limit(40)
+    : { data: [] }
+  const aciertos = (predichos ?? [])
+    .map((p) => {
+      const m = media.find((x) => x.post_id === p.id)
+      const real = m ? liftOf(m) : null
+      return real == null ? null : { id: p.id, predicho: Number(p.predicted_lift), real, fecha: p.published_at as string, tipo: p.post_type as string, prueba: p.schedule_source === "exploracion" }
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x)
+  const errorMedio = aciertos.length ? aciertos.reduce((s, a) => s + Math.abs(a.real - a.predicho), 0) / aciertos.length : null
+  const mismoSentido = aciertos.filter((a) => (a.real >= 1) === (a.predicho >= 1)).length
+
   const card = (m: MediaRow) => {
     const t = m.thumb_key ? thumbs[m.thumb_key] : null
     const l = liftOf(m)
@@ -297,6 +327,69 @@ export default async function MetricasPage() {
             )}
           </CardContent>
         </Card>
+
+        {brand && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Qué aprendió la agenda</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {!modeloReciente ? (
+                <p className="text-muted-foreground">Todavía no hay modelo guardado: se calcula una vez por día.</p>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Cuánto cambian el rendimiento los feriados y el clima, descontando el horario. Con {modeloReciente.n} publicaciones propias
+                    ({Math.round(modeloReciente.model_json.peso * 100)} % propio, el resto aprendido de todas las cuentas). Solo se usa lo que tiene efecto claro.
+                  </p>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {modeloReciente.model_json.efectos.map((e) => (
+                      <div key={e.factor} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5">
+                        <span className="flex-1">{FACTOR[e.factor] ?? e.factor}</span>
+                        <span className={e.claro ? (e.efecto >= 1 ? "font-bold text-emerald-600" : "font-bold text-red-600") : "text-muted-foreground"}>
+                          {e.claro ? liftText(e.efecto) : "sin efecto claro"}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">
+                          {e.n} posts · {e.confianza}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {brand && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">¿La agenda acierta?</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              {aciertos.length === 0 ? (
+                <p className="text-muted-foreground">Todavía no hay publicaciones de la agenda con más de 48 h. Cada una guarda lo que se esperaba y acá se compara con lo que rindió.</p>
+              ) : (
+                <>
+                  <p>
+                    Acertó si iba a rendir más o menos que el promedio en <b>{mismoSentido} de {aciertos.length}</b>
+                    {errorMedio != null && <> · error medio {Math.round(errorMedio * 100)} puntos</>}.
+                  </p>
+                  <div className="divide-y text-xs">
+                    {aciertos.slice(0, 10).map((a) => (
+                      <div key={a.id} className="flex items-center gap-2 py-1.5">
+                        <span className="w-24 text-muted-foreground">{new Date(a.fecha).toLocaleDateString("es-AR", { timeZone: AR, day: "2-digit", month: "short" })}</span>
+                        <span className="w-16">{FORMAT_LABEL[a.tipo] ?? a.tipo}{a.prueba ? " 🧪" : ""}</span>
+                        <span className="flex-1">esperado {liftText(a.predicho)}</span>
+                        <span className={a.real >= 1 ? "font-bold text-emerald-600" : "font-bold text-muted-foreground"}>real {liftText(a.real)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {ours.length > 0 && (
           <Card>
