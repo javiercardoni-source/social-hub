@@ -52,6 +52,7 @@ import {
 } from "../../shared/cos/ads.ts"
 import { candidatosPauta, lunesDe } from "../../shared/cos/sugerencias.ts"
 import { cierreDesdeDatos } from "../../shared/cos/reel.ts"
+import { slugVitrina } from "../../shared/cos/vitrina.ts"
 import { normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
 import { normalizarRasgos, RASGO_CAMPOS } from "../../shared/cos/gustos.ts"
 import type { Format } from "../../shared/cos/timing.ts"
@@ -65,7 +66,7 @@ const PAUSA_ESCRITURA_MS = 10_000
 /** Cuántos ganadores por marca se revisan y se bajan (video). */
 const TOP_REVISAR = 12
 
-const AD_FIELDS = [
+export const AD_FIELDS = [
   "id,name,status,effective_status,created_time",
   "campaign{id,name,objective}",
   "adset{id,name,daily_budget,lifetime_budget,optimization_goal,destination_type,targeting}",
@@ -93,9 +94,9 @@ async function must<T = Record<string, unknown>>(p: PromiseLike<{ data: unknown;
   return data as T
 }
 
-type Pagina<T> = { data: T[]; paging?: { cursors?: { after?: string }; next?: string } }
+export type Pagina<T> = { data: T[]; paging?: { cursors?: { after?: string }; next?: string } }
 /** Todas las páginas de una lectura (con el cursor `after`). */
-async function todas<T>(path: string, token: string, params: Record<string, string>, max = 60): Promise<T[]> {
+export async function todas<T>(path: string, token: string, params: Record<string, string>, max = 60): Promise<T[]> {
   const out: T[] = []
   let after: string | undefined
   for (let i = 0; i < max; i++) {
@@ -121,7 +122,7 @@ async function cuenta(db: SupabaseClient, id: string): Promise<Cuenta> {
 }
 
 /** Página de Facebook / usuario de Instagram → marca (de las cuentas conectadas en Content OS). */
-async function marcasPorPagina(db: SupabaseClient) {
+export async function marcasPorPagina(db: SupabaseClient) {
   const { data } = await db.from("cos_social_accounts").select("brand_id, platform, external_id")
   const pagina = new Map<string, string>()
   const ig = new Map<string, string>()
@@ -131,7 +132,7 @@ async function marcasPorPagina(db: SupabaseClient) {
 
 // ── Ingesta (E1) ────────────────────────────────────────────────────────────
 
-type AnuncioMeta = {
+export type AnuncioMeta = {
   id: string
   name?: string
   status?: string
@@ -156,7 +157,7 @@ type AnuncioMeta = {
   }
 }
 
-function filaAnuncio(a: AnuncioMeta, accountId: string, m: { pagina: Map<string, string>; ig: Map<string, string> }) {
+export function filaAnuncio(a: AnuncioMeta, accountId: string, m: { pagina: Map<string, string>; ig: Map<string, string> }) {
   const cr = a.creative
   const oss = cr?.object_story_spec
   const vd = oss?.video_data
@@ -202,7 +203,7 @@ function filaAnuncio(a: AnuncioMeta, accountId: string, m: { pagina: Map<string,
   }
 }
 
-async function guardarAnuncios(db: SupabaseClient, filas: ReturnType<typeof filaAnuncio>[]) {
+export async function guardarAnuncios(db: SupabaseClient, filas: ReturnType<typeof filaAnuncio>[]) {
   for (const t of trozos(filas, 200)) {
     const { error } = await db.from("cos_ads").upsert(t, { onConflict: "id" })
     if (error) throw new Error(`cos_ads: ${error.message}`)
@@ -311,9 +312,24 @@ async function cerrarSync(db: SupabaseClient, queue: Queue, acc: Cuenta, token: 
     if (!data || data.length < 1000) break
   }
   const ids = [...conGasto.keys()]
+  // Solo se vuelven a pedir los totales de lo que gastó en los últimos 10 días (Meta atribuye hasta 7)
+  // o de lo que todavía no tiene: lo demás no cambia. La app de Meta es LA MISMA que usa el Scheduler
+  // para prender y pausar campañas: pedir los ~900 de nuevo cada día agotó el cupo (#4) el 01-10.
+  const corte = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10)
+  const sinTotales = new Set<string>()
+  for (const t of trozos(ids, 200)) {
+    const { data } = await db.from("cos_ads").select("id, totals").in("id", t)
+    for (const r of data ?? []) if (!(r.totals as { spend?: number } | null)?.spend) sinTotales.add(r.id as string)
+  }
+  const pedir = ids.filter((id) => sinTotales.has(id) || (conGasto.get(id)?.last ?? "") >= corte)
+  // Las fechas de primer/último gasto sí se actualizan para todos (salen de la base, sin Meta).
+  for (const id of ids.filter((x) => !pedir.includes(x))) {
+    const f = conGasto.get(id)!
+    await db.from("cos_ads").update({ first_date: f.first, last_date: f.last }).eq("id", id)
+  }
   // Por anuncio (5 a la vez): filtrando por id desde la cuenta, Meta omite los archivados y los
   // viejos (uno de ellos gastó $2,4 M). Son lecturas: sin pausa.
-  for (const t of trozos(ids, 5)) {
+  for (const t of trozos(pedir, 5)) {
     const r = await Promise.all(
       t.map((id) =>
         graph<{ data: FilaInsights[] }>("GET", `${id}/insights`, token, {
@@ -343,7 +359,7 @@ async function cerrarSync(db: SupabaseClient, queue: Queue, acc: Cuenta, token: 
 
 // ── Medios ──────────────────────────────────────────────────────────────────
 
-type AnuncioFila = ReturnType<typeof filaAnuncio> & {
+export type AnuncioFila = ReturnType<typeof filaAnuncio> & {
   thumb_key: string | null
   video_key: string | null
   totals: Partial<Numeros>
@@ -352,7 +368,7 @@ type AnuncioFila = ReturnType<typeof filaAnuncio> & {
   last_date: string | null
   media_error: string | null
 }
-async function anuncio(db: SupabaseClient, id: string): Promise<AnuncioFila> {
+export async function anuncio(db: SupabaseClient, id: string): Promise<AnuncioFila> {
   return must(db.from("cos_ads").select("*").eq("id", id).single(), `anuncio ${id}`) as Promise<AnuncioFila>
 }
 
@@ -385,7 +401,7 @@ async function urlsDeMedios(db: SupabaseClient, a: AnuncioFila, token: string): 
 }
 
 /** Guarda miniatura (y video si `conVideo`) en cos-media. Devuelve la fila actualizada. */
-async function asegurarMedios(db: SupabaseClient, a: AnuncioFila, conVideo: boolean): Promise<AnuncioFila> {
+export async function asegurarMedios(db: SupabaseClient, a: AnuncioFila, conVideo: boolean): Promise<AnuncioFila> {
   if (a.thumb_key && (!conVideo || a.video_key || a.creative_kind !== "video")) return a
   const acc = await cuenta(db, a.ad_account_id)
   const token = tokenFor(acc.token_ref)
@@ -943,7 +959,18 @@ const create: Handler = async (job, { db, queue, log }) => {
     await guardar({ status: "creada", created_in_meta_at: new Date().toISOString(), error: null })
     await db.from("cos_audit_log").insert({ event: "ads:creada", entity_type: "ad_proposal", entity_id: p.id, actor: "motor", details_json: { adset_id: meta.adset_id, ads: meta.ads } })
     const { count } = await db.from("cos_ad_proposals").select("id", { count: "exact", head: true }).eq("brand_id", p.brand_id).eq("week", p.week).in("status", ["aprobada", "creando"])
-    if (!count) await db.from("cos_audit_log").insert({ event: "ads:tanda_en_meta", entity_type: "brand", entity_id: p.brand_id, actor: "motor", details_json: { week: p.week, mensaje: "Tanda lista en Meta, pausada" } })
+    if (!count) {
+      await db.from("cos_audit_log").insert({ event: "ads:tanda_en_meta", entity_type: "brand", entity_id: p.brand_id, actor: "motor", details_json: { week: p.week, mensaje: "Tanda lista en Meta, pausada" } })
+      // F11 V3: la tanda entera ya está en Meta → se arma su vitrina (Javier la aprueba antes de avisar al equipo).
+      const { data: marca } = await db.from("cos_brands").select("name").eq("id", p.brand_id).single()
+      const titulo = `${marca?.name ?? "Anuncios"} · semana del ${p.week.split("-").reverse().slice(0, 2).join("/")}`
+      const { data: vit } = await db
+        .from("cos_vitrinas")
+        .insert({ brand_id: p.brand_id, slug: slugVitrina(titulo), titulo, bajada: "Los anuncios nuevos de la semana.", origen: "motor", proposal_week: p.week })
+        .select("id")
+        .single()
+      if (vit) await queue.enqueue("vitrina:build", { vitrina_id: vit.id }, { dedupeKey: `vitrina:build:${vit.id}` })
+    }
     log("ads:create listo (PAUSADO)", { propuesta: p.id, adset: meta.adset_id, ads: meta.ads })
   } catch (e) {
     if (e instanceof PermanentError || (e as { meta?: unknown }).meta) {

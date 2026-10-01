@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import { aprendizaje, porQueAnuncio, rankearAnuncios, TIPO_TEXTO, TIPOS, type Numeros, type Revision, type TipoPropuesta } from "../../../../shared/cos/ads"
 import { lunesDe } from "../../../../shared/cos/sugerencias"
 import { PedirTanda, Propuestas, type PropuestaUI } from "./propuestas"
+import { Vitrinas, type VitrinaUI } from "./vitrinas"
 
 export const dynamic = "force-dynamic"
 
@@ -31,6 +32,50 @@ type AdRow = {
   proposal_id: string | null
 }
 
+const VITRINA_URL = process.env.VITRINA_URL ?? "https://vitrina.kitchcocenter.com"
+
+/** Vitrinas de la marca con sus anuncios y lo que se compartió de cada uno (F11). */
+async function cargarVitrinas(brandId: string, slug: string): Promise<VitrinaUI[]> {
+  const db = createAdminClient()
+  const { data: vs } = await db.from("cos_vitrinas").select("*").eq("brand_id", brandId).order("created_at", { ascending: false }).limit(20)
+  const ids = (vs ?? []).map((v) => v.id as string)
+  if (!ids.length) return []
+  const [{ data: its }, { data: evs }] = await Promise.all([
+    db.from("cos_vitrina_items").select("id, vitrina_id, nombre, poster_key, orden").in("vitrina_id", ids).order("orden"),
+    db.from("cos_vitrina_events").select("vitrina_id, item_id, tipo, empleado").in("vitrina_id", ids).limit(20000),
+  ])
+  const urls = await signedUrls((its ?? []).map((x) => x.poster_key).filter(Boolean) as string[], 3 * 3600)
+  const cuenta = (pred: (e: { vitrina_id: string; item_id: string | null; tipo: string; empleado: string | null }) => boolean) => (evs ?? []).filter(pred).length
+  const fecha = (iso: string | null) => (iso ? new Date(iso).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" }) : null)
+  return (vs ?? []).map((v) => ({
+    id: v.id,
+    titulo: v.titulo,
+    bajada: v.bajada,
+    estado: v.estado,
+    origen: v.origen,
+    error: v.error,
+    url: `${VITRINA_URL}/${slug}/${v.slug}/`,
+    creada: fecha(v.created_at) ?? "",
+    turnos: fecha(v.turnos_at),
+    turnosError: v.turnos_error,
+    vistas: cuenta((e) => e.vitrina_id === v.id && e.tipo === "vista"),
+    // Compartidos por persona (los que entraron desde su historia de Turnos).
+    equipo: Object.entries((v.turnos_gente ?? {}) as Record<string, string>)
+      .map(([tok, nombre]) => ({ nombre, compartidos: cuenta((e) => e.vitrina_id === v.id && e.empleado === tok && (e.tipo === "compartir" || e.tipo === "descarga")) }))
+      .sort((a, b) => b.compartidos - a.compartidos),
+    items: (its ?? [])
+      .filter((x) => x.vitrina_id === v.id)
+      .map((x) => ({
+        id: x.id,
+        nombre: x.nombre,
+        tapa: x.poster_key ? urls[x.poster_key] ?? null : null,
+        compartidos: cuenta((e) => e.item_id === x.id && e.tipo === "compartir"),
+        descargas: cuenta((e) => e.item_id === x.id && e.tipo === "descarga"),
+        verIg: cuenta((e) => e.item_id === x.id && e.tipo === "ver_ig"),
+      })),
+  }))
+}
+
 const pesos = (n: number | null | undefined) => (n == null ? "—" : `$${Math.round(n).toLocaleString("es-AR")}`)
 
 function Chip({ children, tono }: { children: React.ReactNode; tono: "ok" | "mal" | "neutro" }) {
@@ -51,7 +96,7 @@ function Chip({ children, tono }: { children: React.ReactNode; tono: "ok" | "mal
 export default async function AnunciosPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   await requireMember("viewer")
   const { tab: tabRaw } = await searchParams
-  const tab = tabRaw === "ranking" ? "ranking" : "propuestas"
+  const tab = tabRaw === "ranking" ? "ranking" : tabRaw === "vitrinas" ? "vitrinas" : "propuestas"
   const brand = await getActiveBrand()
   if (!brand) {
     return (
@@ -138,6 +183,7 @@ export default async function AnunciosPage({ searchParams }: { searchParams: Pro
           {[
             { k: "propuestas", t: `Tanda de la semana (${propuestas.filter((p) => p.week === week && p.status !== "descartada").length})` },
             { k: "ranking", t: "Ranking y filtro" },
+            { k: "vitrinas", t: "Vitrinas" },
           ].map((x) => (
             <Link key={x.k} href={`/anuncios?tab=${x.k}`} className={cn("rounded-full border px-4 py-1.5 text-sm font-semibold", tab === x.k ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}>
               {x.t}
@@ -145,7 +191,9 @@ export default async function AnunciosPage({ searchParams }: { searchParams: Pro
           ))}
         </nav>
 
-        {tab === "propuestas" ? (
+        {tab === "vitrinas" ? (
+          <Vitrinas vitrinas={await cargarVitrinas(brand.id, brand.slug)} linkFijo={`${VITRINA_URL}/${brand.slug}/`} />
+        ) : tab === "propuestas" ? (
           <Propuestas propuestas={propuestas} semana={week} />
         ) : (
           <div className="space-y-4">

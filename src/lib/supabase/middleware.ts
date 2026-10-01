@@ -12,6 +12,7 @@ import { NextResponse, type NextRequest } from "next/server"
  *  - /r/                 links cortos de «Comentá y te escribo» (los abre cualquiera)
  *  - /privacidad         política pública que exigen Google y Meta para sus apps
  *  - /manifest…, /icon…  para poder instalarla como app en el celular (el teléfono los pide sin sesión)
+ *  - /vitrina/, /api/vitrina/  las vitrinas de anuncios (F11): web pública para compartir en Instagram
  */
 export const PUBLIC_PREFIXES = [
   "/login",
@@ -23,7 +24,20 @@ export const PUBLIC_PREFIXES = [
   "/manifest.webmanifest",
   "/icon",
   "/apple-icon",
+  "/vitrina/",
+  "/api/vitrina/",
 ] as const
+
+/**
+ * vitrina.kitchcocenter.com solo sirve vitrinas: /<marca>/… se reescribe a /vitrina/<marca>/…
+ * y todo lo demás del panel da 404 en ese dominio (no se puede ni ver el login desde ahí).
+ */
+export function rutaVitrina(host: string, pathname: string): { rewrite: string } | { pasar: true } | { noExiste: true } | null {
+  if (!host.startsWith("vitrina.")) return null
+  if (pathname.startsWith("/api/vitrina/")) return { pasar: true }
+  if (/^\/[a-z0-9-]{2,40}(\/[a-z0-9-]{6,80})?\/?$/.test(pathname)) return { rewrite: `/vitrina${pathname}` }
+  return { noExiste: true }
+}
 
 export function isPublicPath(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p.endsWith("/") ? p : `${p}/`))
@@ -31,6 +45,14 @@ export function isPublicPath(pathname: string): boolean {
 
 export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl
+  const v = rutaVitrina(request.headers.get("host") ?? "", pathname)
+  if (v && "noExiste" in v) return new NextResponse("No existe", { status: 404, headers: { "x-robots-tag": "noindex" } })
+  if (v && "pasar" in v) return NextResponse.next({ request })
+  if (v && "rewrite" in v) {
+    const url = request.nextUrl.clone()
+    url.pathname = v.rewrite
+    return NextResponse.rewrite(url, { headers: { "x-robots-tag": "noindex, nofollow" } })
+  }
   if (isPublicPath(pathname)) return NextResponse.next({ request })
 
   // Sin configuración, se CIERRA (antes se salteaba el login y quedaba todo abierto).

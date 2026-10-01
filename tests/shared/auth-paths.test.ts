@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from "vitest"
 vi.mock("@supabase/ssr", () => ({ createServerClient: vi.fn() }))
 vi.mock("next/server", () => ({ NextResponse: {} }))
 
-const { isPublicPath } = await import("../../src/lib/supabase/middleware")
+const { isPublicPath, rutaVitrina } = await import("../../src/lib/supabase/middleware")
 const { roleAtLeast } = await import("../../src/lib/cos/roles")
 
 describe("rutas públicas del proxy", () => {
@@ -27,5 +27,21 @@ describe("roles", () => {
     expect(roleAtLeast("approver", "approver")).toBe(true)
     expect(roleAtLeast("editor", "approver")).toBe(false)
     expect(roleAtLeast("viewer", "editor")).toBe(false)
+  })
+})
+
+describe("vitrina.kitchcocenter.com", () => {
+  it("solo sirve vitrinas; el panel no existe en ese dominio", () => {
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/fasutofudo/")).toEqual({ rewrite: "/vitrina/fasutofudo/" })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/fasutofudo/onigiris-k3x9q2")).toEqual({ rewrite: "/vitrina/fasutofudo/onigiris-k3x9q2" })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/api/vitrina/evento")).toEqual({ pasar: true })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/login")).toEqual({ rewrite: "/vitrina/login" })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/inicio/x/y")).toEqual({ noExiste: true })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/")).toEqual({ noExiste: true })
+    expect(rutaVitrina("social.kitchcocenter.com", "/inicio")).toBeNull()
+  })
+  it("las vitrinas son públicas en el panel también (vista previa)", () => {
+    expect(isPublicPath("/vitrina/fasutofudo/")).toBe(true)
+    expect(isPublicPath("/api/vitrina/evento")).toBe(true)
   })
 })
