@@ -56,6 +56,7 @@ import { gustosHandlers } from "./gustos.ts"
 import { agendaHandlers } from "./agenda.ts"
 import { tasteHandlers } from "./taste.ts"
 import { sugerenciasHandlers } from "./sugerencias.ts"
+import { adsHandlers } from "./ads.ts"
 import { elegirImagen, elegirMusica, temasParaReel } from "./eleccion.ts"
 import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
 import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
@@ -1755,4 +1756,5 @@ export const handlers: Record<string, Handler> = {
   ...agendaHandlers,
   ...tasteHandlers,
   ...sugerenciasHandlers,
+  ...adsHandlers,
 }

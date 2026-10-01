@@ -44,7 +44,7 @@ export function tokenFor(tokenRef: string | null): string {
   return token
 }
 
-async function graph<T>(method: "GET" | "POST" | "DELETE", path: string, token: string, params: Record<string, string | boolean | undefined> = {}): Promise<T> {
+export async function graph<T>(method: "GET" | "POST" | "DELETE", path: string, token: string, params: Record<string, string | boolean | undefined> = {}): Promise<T> {
   const clean = Object.fromEntries(
     Object.entries({ ...params, access_token: token }).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]),
   )

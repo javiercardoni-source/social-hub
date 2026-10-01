@@ -48,7 +48,7 @@ export const Classification = z.object({
 export type Classification = z.infer<typeof Classification>
 
 let client: Anthropic | null = null
-function anthropic(): Anthropic {
+export function anthropic(): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) throw new PermanentError("falta ANTHROPIC_API_KEY: la IA no está configurada")
   client ??= new Anthropic()
   return client

@@ -18,6 +18,7 @@ import {
   Palette,
   BarChart3,
   LayoutGrid,
+  Megaphone,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { elegirMarca } from "@/lib/cos/brand-actions"
@@ -29,6 +30,7 @@ type Props = {
   activeSlug: string | null
   pendingCount: number
   mediaCount: number
+  adsCount: number
   globalPause: boolean
   live: boolean
 }
@@ -42,7 +44,7 @@ function brandInitials(name: string) {
     .toUpperCase()
 }
 
-export function SidebarClient({ brands, activeSlug, pendingCount, mediaCount, globalPause, live }: Props) {
+export function SidebarClient({ brands, activeSlug, pendingCount, mediaCount, adsCount, globalPause, live }: Props) {
   const pathname = usePathname()
   const [switching, startSwitch] = useTransition()
   const [pausing, startPause] = useTransition()
@@ -57,6 +59,7 @@ export function SidebarClient({ brands, activeSlug, pendingCount, mediaCount, gl
     { name: "Calendario", href: "/calendar", icon: CalendarDays },
     { name: "Feed", href: "/feed", icon: LayoutGrid },
     { name: "Métricas", href: "/analytics", icon: BarChart3 },
+    { name: "Anuncios", href: "/anuncios", icon: Megaphone, count: adsCount > 0 ? adsCount : null },
     { name: "Cuentas", href: "/accounts", icon: Link2 },
     { name: "Marca", href: "/marca", icon: Palette },
   ]

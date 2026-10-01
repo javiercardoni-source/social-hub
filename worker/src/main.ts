@@ -223,6 +223,33 @@ const agendaStart = setTimeout(() => {
 }, alaHora)
 shutdown.signal.addEventListener("abort", () => clearTimeout(agendaStart), { once: true })
 
+// Motor de ADS (F10, docs/PLAN-MOTOR-ADS.md): solo si está el token de anuncios (META_ADS_TOKEN).
+//   ads:sync   todos los días a las 4 de Buenos Aires, una corrida por cuenta (se parte sola por mes)
+//   ads:batch  la tanda de la semana, los lunes a las 7 (después de las sugerencias de las 6)
+// Al arrancar, las cuentas que nunca se leyeron arrancan su backfill (desde dic-2025).
+import("./ads.ts").then(({ adsConfig }) => {
+  if (!adsConfig()) return log("Motor de ADS apagado (falta META_ADS_TOKEN)")
+  const pedir = (tipo: string, payload: Record<string, unknown>, clave: string) =>
+    queue.enqueue(tipo, payload, { dedupeKey: clave }).catch((e) => log(`no pude encolar ${tipo}`, { error: String(e) }))
+  async function cuentas(soloNuevas: boolean) {
+    let q = db.from("cos_ad_accounts").select("id").eq("active", true)
+    if (soloNuevas) q = q.is("insights_until", null)
+    const { data, error } = await q
+    if (error) return log("no pude leer las cuentas de anuncios", { error: error.message })
+    const dia = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10)
+    for (const c of data ?? []) await pedir("ads:sync", { account_id: c.id }, `ads:sync:${c.id}:inicio:${dia}`)
+  }
+  void cuentas(true)
+  const reloj = () => {
+    const ahora = new Date(Date.now() - 3 * 3600_000)
+    const dia = ahora.toISOString().slice(0, 10)
+    if (ahora.getUTCHours() === 4) void cuentas(false)
+    if (ahora.getUTCHours() === 7 && ahora.getUTCDay() === 1) void pedir("ads:batch", {}, `ads:batch:${dia}`)
+  }
+  const t = setInterval(reloj, 3600_000)
+  shutdown.signal.addEventListener("abort", () => clearInterval(t), { once: true })
+})
+
 // Historias de Turnos "para redes" (F3): cada 3 minutos, solo si está configurado.
 import("./turnos.ts").then(({ turnosConfig }) => {
   if (!turnosConfig()) return log("Turnos no configurado (TURNOS_API_URL / CONTENT_OS_SECRET): historias apagadas")

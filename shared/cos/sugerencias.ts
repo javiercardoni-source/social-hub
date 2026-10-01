@@ -45,19 +45,21 @@ export function mencionaAlgoNoVigente(texto: string, vigentes: { precios: string
 }
 
 /**
- * Publicaciones orgánicas de los últimos 14 días que rindieron claramente por encima de lo esperado
+ * Publicaciones orgánicas de los últimos `maxDias` días que rindieron claramente por encima de lo esperado
  * (en sus primeras 48 h), clasificadas por el objetivo en el que más se destacan.
  */
 export function candidatosPauta(
   posts: (PostGusto & { caption: string; permalink: string | null; pautado: boolean })[],
   vigentes: { precios: string[]; promos: string[] },
   ahora = Date.now(),
+  /** Hasta cuántos días atrás (14 para las sugerencias; el motor de ADS mira 60). */
+  maxDias = 14,
 ): Candidato[] {
   const L = liftsPorMetrica(posts)
   const out: Candidato[] = []
   for (const p of posts) {
     const edad = ahora - Date.parse(p.postedAt)
-    if (p.format === "story" || p.pautado || edad > 14 * 86_400_000 || edad < 36 * 3600_000) continue
+    if (p.format === "story" || p.pautado || edad > maxDias * 86_400_000 || edad < 36 * 3600_000) continue
     if (mencionaAlgoNoVigente(p.caption, vigentes)) continue
     const l = L.get(p.id)
     if (!l) continue

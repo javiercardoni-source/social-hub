@@ -76,3 +76,27 @@ sugerido (copiados del conjunto que mejor rindió en esa marca) y una línea de 
 - Producto real. Si una pieza viene de IA, se marca y no se propone sin aviso.
 - Números de Meta siempre de `cost_per_action_type`; insights por `level=ad` paginado (ver reglas del Meta Ads Center).
 - Lecturas sin pausa; escrituras con 10 s entre llamadas (anti-baneo).
+
+## Estado (01-10-2026): E1–E5 construidas
+
+| Etapa | Dónde | Notas |
+|---|---|---|
+| E1 Ingesta | `supabase/migrations/0023_cos_ads.sql`, `worker/src/ads.ts` (`ads:sync`, `ads:media`), `scripts/importar-scheduler.mjs` | 7 cuentas, 903 anuncios con gasto, ~14 mil filas diarias desde dic-2025. La marca sale de la **página** del anuncio (los de Sensaciones corren en «Live Javi»). Sync diario 4 a. m.; un mes por trabajo. Scheduler importado: 784 días, ventas CAPI y número de cada anuncio |
+| E2 Ranking + filtro | `shared/cos/ads.ts` (`rankearAnuncios`), `ads:review` (`worker/src/ads-ai.ts`) | Costo por conversación de la API, mínimo 5 conversaciones, suavizado K=10. La IA mira hasta 14 cuadros por video |
+| E3 Tanda | `ads:batch` (lunes 7 a. m.) + `ads:piece` | 3 a 5 por marca, sin repetir diseño ni fuente en 4 semanas |
+| E4 Aprobación → Meta | `/anuncios` + `src/lib/cos/ads-actions.ts` + `ads:create` | Un paso por trabajo, 10 s entre escrituras, todo PAUSED. Única puerta de escritura: `escribir()` |
+| E5 Aprendizaje | `aprendizaje()` + `cos_ads.proposal_id` | Compara cada anuncio creado con su ganador de origen (5 conversaciones mínimo) |
+
+### Lo que se aprendió al correrlo con los datos reales
+- **Todos los ganadores de las tres marcas tienen el precio pegado encima del producto** (placas fijas
+  de 5 s: «40 PIEZAS $31.900», «SOLO 12 MIL PESOS» + «GLUTEN FREE»). No se pueden pautar tal cual ni
+  recortar. Por eso la re-edición tiene dos caminos: (a) tramos limpios del video, si los hay;
+  (b) **rearmado**: el titular ganador SIN precio (ni fechas especiales ni logística) sobre fotos y
+  videos REALES ya publicados en Instagram que la IA elige del mismo producto.
+- Meta ya no deja crear anuncios en campañas de **objetivo viejo** (MESSAGES, LINK_CLICKS…): la
+  plantilla de público pasa a ser el mejor conjunto de mensajes con objetivo OUTCOME_* de la marca
+  (Interacción primero; en Sensaciones solo queda vivo Tráfico con botón de WhatsApp).
+- El Instagram de FasutoFudo tiene clips hechos con Sora que desde una miniatura parecen reales:
+  toda propuesta rearmada lleva el aviso de confirmar producto real.
+- v26 de la Graph API ya no acepta `?ids=`; filtrando por `ad.id` desde la cuenta, Meta omite los
+  archivados (uno gastó $2,4 M): los totales se piden por anuncio.
