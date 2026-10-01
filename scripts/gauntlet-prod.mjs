@@ -23,6 +23,7 @@ const PAGES = {
   "/accounts": /Cuentas conectadas/,
   "/marca": /Marca/,
   "/analytics": /Métricas|Analytics/,
+  "/anuncios": /Anuncios/,
 }
 const BRANDS = ["", "fasutofudo", "bijutsukan", "sensaciones"]
 const ERROR_TEXT = /No se pudo|Application error|This page couldn|Something went wrong|Error: /
