@@ -53,7 +53,8 @@ async function desdeCampaña(db: SupabaseClient, v: Vitrina, log: (m: string, e?
   const acc = `act_${camp.account_id}`
   if (!(cuentas ?? []).some((c) => c.id === acc)) throw new PermanentError(`la cuenta ${acc} no está en Content OS (cos_ad_accounts)`)
   const m = await marcasPorPagina(db)
-  const vivos = ads.filter((a) => !["DELETED", "ARCHIVED"].includes(a.effective_status ?? ""))
+  // En el orden de sus nombres (A, B, C…), no en el que los devuelve Meta.
+  const vivos = ads.filter((a) => !["DELETED", "ARCHIVED"].includes(a.effective_status ?? "")).sort((x, y) => (x.name ?? "").localeCompare(y.name ?? ""))
   await guardarAnuncios(db, vivos.map((a) => filaAnuncio(a, acc, m)))
   const out: Fuente[] = []
   for (const meta of vivos) {
