@@ -1,5 +1,7 @@
 "use server"
 
+import { MOTIVOS_DE_MATERIAL, validarRechazo } from "../../../shared/cos/rechazos"
+
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
 import { primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
 import { aviso } from "@/lib/aviso"
@@ -244,18 +246,50 @@ async function sellarYProgramar(db: ReturnType<typeof createAdminClient>, postId
 
 // ── rechazar post ────────────────────────────────────────────────────────────
 
-export async function rechazarPost(postId: string, motivo: string) {
-  await requireMember("approver")
+/**
+ * Rechazar con motivo: los chips y la explicación quedan en el post y la IA los lee en cada texto
+ * que escribe para la marca (shared/cos/rechazos.ts). Si el motivo es el material (la foto no sirve,
+ * parece IA), ese archivo sale del Archivo y no se vuelve a proponer. `todos` rechaza también los
+ * otros formatos pendientes de la misma subida.
+ */
+export async function rechazarPost(postId: string, motivos: string[] = [], nota = "", todos = false) {
+  const member = await requireMember("approver")
+  const problema = validarRechazo(motivos, nota)
+  if (problema) throw aviso(problema)
   const db = createAdminClient()
-
+  const { data: p } = await db.from("cos_posts").select("id, brand_id, cos_post_media(cos_asset_versions(asset_id))").eq("id", postId).single()
+  if (!p) throw aviso("Ese post ya no existe")
+  const assetId = (p as unknown as { cos_post_media: { cos_asset_versions: { asset_id: string } | null }[] }).cos_post_media?.[0]?.cos_asset_versions?.asset_id ?? null
+  let ids = [postId]
+  if (todos && assetId) {
+    const { data: hermanos } = await db
+      .from("cos_posts")
+      .select("id, cos_post_media!inner(cos_asset_versions!inner(asset_id))")
+      .eq("brand_id", p.brand_id)
+      .eq("status", "PENDING_APPROVAL")
+      .eq("cos_post_media.cos_asset_versions.asset_id", assetId)
+    ids = [...new Set([postId, ...(hermanos ?? []).map((h) => h.id as string)])]
+  }
   const { error } = await db
     .from("cos_posts")
-    .update({ status: "REJECTED", last_error: motivo || "Rechazado" })
-    .eq("id", postId)
+    .update({
+      status: "REJECTED",
+      last_error: nota.trim() || "Rechazado desde Aprobaciones",
+      reject_reasons: motivos,
+      reject_note: nota.trim() || null,
+      rejected_at: new Date().toISOString(),
+      rejected_by: member.userId,
+    })
+    .in("id", ids)
   if (error) throw aviso(`No se pudo rechazar: ${error.message}`)
+  if (assetId && motivos.some((m) => (MOTIVOS_DE_MATERIAL as string[]).includes(m))) {
+    await db.from("cos_assets").update({ review_status: "discarded", status: "ARCHIVED" }).eq("id", assetId)
+  }
+  await db.from("cos_audit_log").insert({ event: "post:rechazado", entity_type: "post", entity_id: postId, actor: member.email ?? member.userId, details_json: { motivos, nota, posts: ids.length } })
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
+  return { rechazados: ids.length }
 }
 
 // ── cancelar post ────────────────────────────────────────────────────────────

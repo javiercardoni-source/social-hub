@@ -16,6 +16,8 @@ export type BrandContext = {
    * system prompt: cada motor agrega solo el suyo (reel al guion, post a la frase del feed, historia a las historias).
    */
   estilos?: { post?: string; reel?: string; historia?: string }
+  /** Lo que el dueño rechazó últimamente y por qué (shared/cos/rechazos.ts → leccionesDeRechazos). */
+  lecciones?: string
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -57,6 +59,7 @@ export function brandSystemPrompt(b: BrandContext): string {
     "",
     "Voz y contexto de la marca (sale del knowledge-base):",
     b.toneMd.trim() || "(todavía no cargado: usá un tono argentino, informal y cercano, con emojis moderados)",
+    b.lecciones?.trim() ? `\n${b.lecciones.trim()}` : "",
   ].join("\n")
 }
 

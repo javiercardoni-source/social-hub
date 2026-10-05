@@ -48,6 +48,7 @@ import {
 } from "./meta.ts"
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
 import { resumenEstilo, type FichaRef, type Para } from "../../shared/cos/estilo.ts"
+import { leccionesDeRechazos } from "../../shared/cos/rechazos.ts"
 import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
@@ -116,7 +117,19 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
     .eq("status", "lista")
     .order("created_at", { ascending: false })
   const de = (p: Para) => resumenEstilo((refs ?? []).filter((r) => r.para === p).map((r) => r.analysis as FichaRef), p)
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") } }
+  // Lo que el dueño rechazó en los últimos 90 días y por qué: la IA aprende de eso.
+  const { data: rech } = await db
+    .from("cos_posts")
+    .select("reject_reasons, reject_note, post_type, caption, overlay_text, rejected_at")
+    .eq("brand_id", brandId)
+    .not("rejected_at", "is", null)
+    .gte("rejected_at", new Date(Date.now() - 90 * 86_400_000).toISOString())
+    .order("rejected_at", { ascending: false })
+    .limit(40)
+  const lecciones = leccionesDeRechazos(
+    (rech ?? []).map((r) => ({ reasons: r.reject_reasons ?? [], note: r.reject_note, post_type: r.post_type, caption: r.caption, overlay_text: r.overlay_text, at: r.rejected_at as string })),
+  )
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones }
 }
 
 type AssetRow = {

@@ -237,3 +237,16 @@ describe("auditoría", () => {
     await expect(db.query(`update cos_audit_log set actor = 'x'`)).rejects.toThrow(/solo de agregado/)
   })
 })
+
+describe("rechazo con motivo (0026)", () => {
+  it("se puede rechazar un pendiente guardando motivos y explicación", async () => {
+    const { postId } = await crearPostFasutofudo(db)
+    await db.query(`update cos_posts set status = 'PENDING_APPROVAL' where id = $1 and status = 'DRAFT'`, [postId])
+    await db.query(
+      `update cos_posts set status = 'REJECTED', reject_reasons = $2, reject_note = $3, rejected_at = now(), rejected_by = $4 where id = $1`,
+      [postId, ["texto", "voz"], "Muy formal", JAVIER],
+    )
+    const p = await one<{ status: string; reject_reasons: string[]; reject_note: string }>(db, `select status, reject_reasons, reject_note from cos_posts where id = $1`, [postId])
+    expect(p).toEqual({ status: "REJECTED", reject_reasons: ["texto", "voz"], reject_note: "Muy formal" })
+  })
+})

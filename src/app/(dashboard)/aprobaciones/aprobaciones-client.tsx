@@ -11,6 +11,7 @@ import { PlatformIcon } from "@/components/ui/platform-icon"
 import { AlertTriangle, CheckCircle, Heart, Loader2, MessageCircle, Send, Bookmark, ThumbsUp, Share2, XCircle, CheckCheck, Sparkles, Volume2, VolumeX } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { esNavidadOAnioNuevo } from "../../../../shared/cos/feriados"
+import { MOTIVOS, validarRechazo } from "../../../../shared/cos/rechazos"
 
 export type PostItem = {
   id: string
@@ -220,6 +221,8 @@ function GrupoCard({ g }: { g: Grupo }) {
   // Sonido de la vista previa (se activa desde la fila «Sonido original» de Música).
   const [sonido, setSonido] = useState(false)
   const [resuelto, setResuelto] = useState<Record<string, "aprobado" | "rechazado">>({})
+  // Rechazo con motivo: el motor aprende de esto (shared/cos/rechazos.ts).
+  const [rechazo, setRechazo] = useState<{ open: boolean; motivos: string[]; nota: string; todos: boolean }>({ open: false, motivos: [], nota: "", todos: false })
   const [textos, setTextos] = useState(() =>
     Object.fromEntries(
       g.posts.map((p) => [
@@ -700,6 +703,66 @@ function GrupoCard({ g }: { g: Grupo }) {
 
           {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
 
+          {/* Rechazo con motivo: queda guardado y la IA lo lee para no repetirlo */}
+          {rechazo.open && !resuelto[p.id] && (
+            <div className="space-y-2 rounded-xl border border-red-200 bg-red-50/60 p-3 dark:border-red-900 dark:bg-red-950/30">
+              <p className="text-sm font-semibold">¿Por qué no va? El motor aprende de esto.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {MOTIVOS.map((m) => {
+                  const on = rechazo.motivos.includes(m.id)
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setRechazo((r) => ({ ...r, motivos: on ? r.motivos.filter((x) => x !== m.id) : [...r.motivos, m.id] }))}
+                      className={cn("rounded-full border px-2.5 py-1 text-xs", on ? "border-red-500 bg-red-600 font-semibold text-white" : "bg-background hover:bg-muted")}
+                    >
+                      {m.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <textarea
+                value={rechazo.nota}
+                onChange={(e) => setRechazo((r) => ({ ...r, nota: e.target.value }))}
+                rows={2}
+                maxLength={500}
+                placeholder="Contalo con tus palabras (opcional). Ej: muy formal, hablale como a un amigo · el combo de la foto no es ese"
+                className="w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-red-300"
+              />
+              {(rechazo.motivos.includes("foto") || rechazo.motivos.includes("ia")) && (
+                <p className="text-xs text-muted-foreground">Esa foto o video sale del Archivo y no se vuelve a proponer.</p>
+              )}
+              {pendientes.length > 1 && (
+                <label className="flex items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={rechazo.todos} onChange={(e) => setRechazo((r) => ({ ...r, todos: e.target.checked }))} />
+                  Rechazar también los otros {pendientes.length - 1} formatos de esta subida
+                </label>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  className="gap-1 bg-red-600 hover:bg-red-700"
+                  disabled={pending || !!validarRechazo(rechazo.motivos, rechazo.nota)}
+                  onClick={() =>
+                    run(async () => {
+                      await rechazarPost(p.id, rechazo.motivos, rechazo.nota, rechazo.todos)
+                      const ids = rechazo.todos ? pendientes.map((x) => x.id) : [p.id]
+                      setResuelto((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, "rechazado" as const])) }))
+                      setRechazo({ open: false, motivos: [], nota: "", todos: false })
+                    })
+                  }
+                >
+                  <XCircle className="h-3.5 w-3.5" /> Rechazar
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setRechazo((r) => ({ ...r, open: false }))}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Acciones */}
           <div className="mt-auto flex flex-wrap items-center gap-2 border-t pt-3">
             {!resuelto[p.id] && (
@@ -713,12 +776,8 @@ function GrupoCard({ g }: { g: Grupo }) {
                   variant="outline"
                   className="gap-1 text-red-600 hover:bg-red-50"
                   disabled={pending}
-                  onClick={() =>
-                    run(async () => {
-                      await rechazarPost(p.id, "Rechazado desde Aprobaciones")
-                      setResuelto((r) => ({ ...r, [p.id]: "rechazado" }))
-                    })
-                  }
+                  aria-expanded={rechazo.open}
+                  onClick={() => setRechazo((r) => ({ ...r, open: !r.open }))}
                 >
                   <XCircle className="h-3.5 w-3.5" /> Rechazar
                 </Button>
