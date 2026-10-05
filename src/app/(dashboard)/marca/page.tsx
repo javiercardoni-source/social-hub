@@ -38,7 +38,7 @@ export default async function MarcaPage() {
 
   // Motores visuales: referencias, tipografías, logo y biblioteca de sonido de la marca.
   const [{ data: assets }, { data: temas }, { data: fichas }] = await Promise.all([
-    db.from("cos_brand_assets").select("id, kind, name, storage_key, mime, note, status, analysis, error").eq("brand_id", brand.id).order("created_at", { ascending: false }),
+    db.from("cos_brand_assets").select("id, kind, name, storage_key, mime, note, status, analysis, error, para").eq("brand_id", brand.id).order("created_at", { ascending: false }),
     db.storage.from("cos-media").list(`music/${brand.slug}`, { limit: 200 }),
     db
       .from("cos_music_tracks")
@@ -58,6 +58,7 @@ export default async function MarcaPage() {
     note: a.note,
     status: a.status,
     analysis: a.analysis,
+    para: a.para ?? null,
     error: a.error,
   }))
   const musica: Tema[] = musicaKeys.map((k) => {

@@ -8,6 +8,7 @@ import { requireMember } from "@/lib/cos/auth"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { KINDS, extDe, validarArchivo, type KindMotor } from "../../../shared/cos/motores"
 import { esRutaDeMusica, normalizarEtiquetas, tituloTema } from "../../../shared/cos/gustos"
+import { PARAS, paraPorDefecto, type Para } from "../../../shared/cos/estilo"
 
 /**
  * Marca → Motores: lo que cada marca le da a los motores visuales (referencias de estilo,
@@ -64,7 +65,7 @@ async function rearmarPendientes(db: ReturnType<typeof createAdminClient>, brand
   return data?.length ?? 0
 }
 
-export async function registrarMotor(input: { kind: KindMotor; key: string; name: string; size: number; note?: string }) {
+export async function registrarMotor(input: { kind: KindMotor; key: string; name: string; size: number; note?: string; para?: Para }) {
   const { member, brand, db } = await marcaActiva()
   if (!KINDS.includes(input.kind)) throw aviso("Tipo inválido")
   // La key la generó prepararSubidaMotor para esta marca y este tipo.
@@ -111,6 +112,8 @@ export async function registrarMotor(input: { kind: KindMotor; key: string; name
       mime,
       size_bytes: input.size,
       note: input.note?.trim().slice(0, 500) || null,
+      // Referencias: el formato que eligió en la pantalla (o el que sale del archivo).
+      para: input.kind === "referencia" ? (input.para && PARAS.includes(input.para) ? input.para : paraPorDefecto(mime)) : null,
       status: input.kind === "referencia" ? "analizando" : "lista",
       created_by: member.userId,
     })
@@ -192,4 +195,21 @@ export async function etiquetarTema(trackId: string, etiquetas: { genre: string 
   if (!data?.length) throw aviso("Ese tema no es de esta marca")
   revalidatePath("/marca")
   return e
+}
+
+/** Cambia el formato de una referencia (post, reel o historia) y la vuelve a analizar con ese foco. */
+export async function cambiarParaReferencia(id: string, para: Para) {
+  const { brand, db } = await marcaActiva()
+  if (!PARAS.includes(para)) throw aviso("Formato inválido")
+  const { data, error } = await db
+    .from("cos_brand_assets")
+    .update({ para, status: "analizando", error: null })
+    .eq("id", id)
+    .eq("brand_id", brand.id)
+    .eq("kind", "referencia")
+    .select("id")
+  if (error) throw aviso(`No se pudo cambiar: ${error.message}`)
+  if (!data?.length) throw aviso("Esa referencia no es de esta marca")
+  await db.rpc("cos_enqueue_job", { p_type: "ref:analyze", p_payload: { ref_id: id }, p_run_at: new Date().toISOString(), p_dedupe_key: `ref:${id}:${para}` })
+  revalidatePath("/marca")
 }

@@ -47,6 +47,7 @@ import {
   type PostType,
 } from "./meta.ts"
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
+import { resumenEstilo, type FichaRef, type Para } from "../../shared/cos/estilo.ts"
 import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
@@ -106,7 +107,16 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
     "marca",
   )) as { name: string; slug: string; tone_md: string; rules_json: BrandContext["rules"]; datos_vigentes: unknown }
   const vigentes = datosParaIA(normalizarDatos(b.datos_vigentes), arDay(new Date()))
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes }
+  // Fichas de las referencias de estilo, por formato (cada motor usa solo la suya).
+  const { data: refs } = await db
+    .from("cos_brand_assets")
+    .select("para, analysis")
+    .eq("brand_id", brandId)
+    .eq("kind", "referencia")
+    .eq("status", "lista")
+    .order("created_at", { ascending: false })
+  const de = (p: Para) => resumenEstilo((refs ?? []).filter((r) => r.para === p).map((r) => r.analysis as FichaRef), p)
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") } }
 }
 
 type AssetRow = {
@@ -1486,7 +1496,7 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
 /** Ficha de estilo de una referencia: cortes medidos con ffmpeg + lectura de la IA. */
 const analyzeRef: Handler = async (job, { db, log }) => {
   const id = idFrom(job, "ref_id")
-  const { data: r, error } = await db.from("cos_brand_assets").select("id, brand_id, kind, storage_key, mime, note").eq("id", id).single()
+  const { data: r, error } = await db.from("cos_brand_assets").select("id, brand_id, kind, storage_key, mime, note, para").eq("id", id).single()
   if (error || !r) return log("referencia borrada antes de analizarse", { ref: id })
   if (r.kind !== "referencia") return
   try {
@@ -1505,7 +1515,7 @@ const analyzeRef: Handler = async (job, { db, log }) => {
       return { frames: imgs.map((data, i) => ({ at: times[i], data })), duracion: dur, cortes: cuts }
     })
     const s = await settings(db)
-    const ficha = await analyzeReference({ db, model: s.ai_model, brand: await brandContext(db, r.brand_id), frames, duracion, cortes, nota: r.note })
+    const ficha = await analyzeReference({ db, model: s.ai_model, brand: await brandContext(db, r.brand_id), frames, duracion, cortes, nota: r.note, para: r.para ?? undefined })
     const medidas = duracion != null ? { duracion_s: Math.round(duracion * 10) / 10, cortes: cortes!.length, toma_promedio_s: Math.round((duracion / (cortes!.length + 1)) * 10) / 10 } : null
     await db.from("cos_brand_assets").update({ status: "lista", analysis: { ...ficha, medidas }, error: null }).eq("id", id)
     log("referencia analizada", { ref: id, cortes: cortes?.length ?? null })

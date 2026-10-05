@@ -6,9 +6,11 @@ import { AlertTriangle, CheckCircle, Circle, Loader2, Play, Plus, RefreshCw, Tra
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { createClient } from "@/lib/supabase/client"
-import { borrarMotor, borrarMusica, etiquetarTema, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
+import { borrarMotor, borrarMusica, cambiarParaReferencia, etiquetarTema, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
 import { explicarError } from "@/lib/ui-errors"
+import { cn } from "@/lib/utils"
 import { validarArchivo, type KindMotor } from "../../../../shared/cos/motores"
+import { PARAS, PARA_AYUDA, PARA_TEXTO, type Para } from "../../../../shared/cos/estilo"
 import { GENEROS, GENERO_LABEL, MOODS, MOOD_LABEL, type EtiquetasTema, type Genero, type Mood } from "../../../../shared/cos/gustos"
 
 export type Ficha = {
@@ -25,7 +27,7 @@ export type Ficha = {
   evitar?: string[]
   medidas?: { duracion_s: number; cortes: number; toma_promedio_s: number } | null
 }
-export type Insumo = { id: string; kind: KindMotor; name: string; url: string | null; mime: string; note: string | null; status: string; analysis: Ficha | null; error: string | null }
+export type Insumo = { id: string; kind: KindMotor; name: string; url: string | null; mime: string; note: string | null; status: string; analysis: Ficha | null; error: string | null; para: Para | null }
 /** Ficha de un tema (F7): lo medido por el worker + lo marcado a mano. */
 export type FichaTema = EtiquetasTema & { id: string; duracion: number | null; bpm: number | null; energia: number | null; estado: "midiendo" | "lista" | "error" }
 export type Tema = { key: string; name: string; url: string | null; ficha: FichaTema | null }
@@ -39,7 +41,7 @@ const ACEPTA: Record<KindMotor, string> = {
 }
 
 /** Botón que abre el selector de archivos, sube directo a cos-media y registra. */
-function Subir({ kind, etiqueta, multiple, note, onDone, variant = "outline", tile }: { kind: KindMotor; etiqueta: string; multiple?: boolean; note?: string; onDone: (msg: string) => void; variant?: "outline" | "default"; tile?: boolean }) {
+function Subir({ kind, etiqueta, multiple, note, para, onDone, variant = "outline", tile }: { kind: KindMotor; etiqueta: string; multiple?: boolean; note?: string; para?: Para; onDone: (msg: string) => void; variant?: "outline" | "default"; tile?: boolean }) {
   const ref = useRef<HTMLInputElement>(null)
   const [pending, start] = useTransition()
   const [progreso, setProgreso] = useState<string | null>(null)
@@ -68,7 +70,7 @@ function Subir({ kind, etiqueta, multiple, note, onDone, variant = "outline", ti
                 const prep = await prepararSubidaMotor({ kind, name: file.name, size: file.size })
                 const { error } = await createClient().storage.from("cos-media").uploadToSignedUrl(prep.key, prep.token, file, { contentType: file.type || undefined })
                 if (error) throw new Error(`No se pudo subir: ${error.message}`)
-                const r = await registrarMotor({ kind, key: prep.key, name: file.name, size: file.size, note })
+                const r = await registrarMotor({ kind, key: prep.key, name: file.name, size: file.size, note, para })
                 rearmados = Math.max(rearmados, r.rearmados)
                 ok++
               } catch (err) {
@@ -167,11 +169,13 @@ function FichaVista({ f }: { f: Ficha }) {
  * Referencias como el feed de un perfil de Instagram: grilla de 3 columnas, lo más nuevo
  * primero, un cuadro «+» para agregar y ✕ para sacar. Tocando una se ve grande con su ficha.
  */
-function FeedReferencias({ brandName, refs, nota, onMsg }: { brandName: string; refs: Insumo[]; nota: string; onMsg: (m: string) => void }) {
+function FeedReferencias({ brandName, refs: todas, nota, onMsg }: { brandName: string; refs: Insumo[]; nota: string; onMsg: (m: string) => void }) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [abierta, setAbierta] = useState<string | null>(null)
-  const r = refs.find((x) => x.id === abierta) ?? null
+  const [para, setPara] = useState<Para>("reel")
+  const refs = todas.filter((x) => (x.para ?? "post") === para)
+  const r = todas.find((x) => x.id === abierta) ?? null
   const run = (fn: () => Promise<unknown>, after?: () => void) =>
     start(async () => {
       try {
@@ -192,16 +196,37 @@ function FeedReferencias({ brandName, refs, nota, onMsg }: { brandName: string; 
           <div className="flex h-full w-full items-center justify-center rounded-full bg-background text-sm font-extrabold">{brandName.slice(0, 1)}</div>
         </div>
         <div className="text-sm">
-          <p className="font-semibold">{brandName} · estilo</p>
+          <p className="font-semibold">{brandName} · estilo de {PARA_TEXTO[para].toLowerCase()}</p>
           <p className="text-xs text-muted-foreground">
             {refs.length} referencias · {refs.filter((x) => x.status === "lista").length} con ficha
           </p>
         </div>
       </div>
 
+      {/* Un estilo por formato: cada motor lee solo el suyo */}
+      <div className="grid grid-cols-3 border-b text-sm" role="tablist" aria-label="Formato de las referencias">
+        {PARAS.map((p) => {
+          const n = todas.filter((x) => (x.para ?? "post") === p).length
+          return (
+            <button
+              key={p}
+              type="button"
+              role="tab"
+              aria-selected={p === para}
+              onClick={() => setPara(p)}
+              className={cn("flex flex-col items-center gap-0.5 px-2 py-2.5", p === para ? "border-b-2 border-primary font-bold text-primary" : "text-muted-foreground hover:bg-muted")}
+            >
+              <span>{PARA_TEXTO[p]}</span>
+              <span className="text-[11px] font-normal">{n} {n === 1 ? "referencia" : "referencias"}</span>
+            </button>
+          )
+        })}
+      </div>
+      <p className="border-b px-4 py-2 text-xs text-muted-foreground">{PARA_AYUDA[para]}</p>
+
       {/* Grilla */}
       <div className="grid grid-cols-3 gap-0.5 bg-border">
-        <Subir kind="referencia" etiqueta="Agregar" multiple note={nota} tile onDone={onMsg} />
+        <Subir kind="referencia" etiqueta={`Agregar a ${PARA_TEXTO[para]}`} multiple note={nota} para={para} tile onDone={onMsg} />
         {refs.map((x) => (
           <div key={x.id} className="group relative aspect-square bg-muted">
             <button type="button" onClick={() => setAbierta(x.id)} className="block h-full w-full" aria-label={`Ver ${x.name}`}>
@@ -253,6 +278,20 @@ function FeedReferencias({ brandName, refs, nota, onMsg }: { brandName: string; 
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{r.name}</p>
                   {r.note && <p className="text-xs text-muted-foreground">Te gusta: {r.note}</p>}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs">
+                    <span className="text-muted-foreground">Es para:</span>
+                    {PARAS.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        disabled={pending || p === (r.para ?? "post")}
+                        onClick={() => run(() => cambiarParaReferencia(r.id, p))}
+                        className={cn("rounded-full border px-2 py-0.5", p === (r.para ?? "post") ? "border-primary bg-primary/10 font-semibold text-primary" : "hover:bg-muted")}
+                      >
+                        {PARA_TEXTO[p]}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <button type="button" aria-label="Cerrar" className="rounded p-1 hover:bg-muted" onClick={() => setAbierta(null)}>
                   <X className="h-5 w-5" />
@@ -362,7 +401,7 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
         <Seccion
           n={1}
           titulo="Referencias de estilo"
-          ayuda="Videos y placas (de cualquier cuenta) con el estilo que te gusta: cortes, tomas, acercamientos, gráfica, tipografía. La IA arma una ficha de cada una. Hasta 48 MB: si el video es largo, recortá la parte que te gusta."
+          ayuda="Videos y placas (de cualquier cuenta) con el estilo que te gusta, separados por formato: lo de Posts guía las placas del feed, lo de Reels el armado de los videos (cortes, tomas, movimientos) y lo de Historias las frases de las historias. La IA arma una ficha de cada una y toma solo el estilo, nunca la marca ni el producto ajeno. Hasta 48 MB: si el video es largo, recortá la parte que te gusta."
           listo={refs.some((r) => r.status === "lista")}
           opcional={refs.length ? "Analizando" : "Falta"}
         >

@@ -11,6 +11,11 @@ export type BrandContext = {
   rules: { forbidden_words?: string[]; open_days?: string; open_hours?: string }
   /** Datos comerciales vigentes ya filtrados para hoy (datosParaIA). "" = no cargados. */
   vigentes?: string
+  /**
+   * Estilo de las referencias de la marca, POR FORMATO (shared/cos/estilo.ts → resumenEstilo). NO va en el
+   * system prompt: cada motor agrega solo el suyo (reel al guion, post a la frase del feed, historia a las historias).
+   */
+  estilos?: { post?: string; reel?: string; historia?: string }
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -154,6 +159,8 @@ export function reelPrompt(input: {
   pedido?: string
   /** Guion anterior al rehacer: el nuevo tiene que ser distinto. */
   anterior?: { gancho: string; idea: string }
+  /** Estilo de las referencias de reels de la marca (resumenEstilo). */
+  estilo?: string
 }): string {
   return [
     `Sos editor de reels de ${input.marca}. Armás un REEL vertical 9:16 de 12 a 16 s con estas fuentes.`,
@@ -186,6 +193,10 @@ export function reelPrompt(input: {
     "- La bebida (vino, cerveza) nunca es protagonista, aunque aparezca.",
     "- No uses tomas de videos que ya tienen placas de texto viejas o logos de otras marcas.",
     "- Si hay personas, que sea disfrutando.",
+    input.estilo?.trim()
+      ? `\n${input.estilo.trim()}\nAdaptá a ese estilo el orden de las tomas, su duración (siempre dentro de 1.6 a 2.8 s), los movimientos, ` +
+        "las transiciones y cuándo entra el texto. Las reglas de marca de arriba mandan sobre el estilo."
+      : "",
     input.pedido?.trim() ? `\nPedido de quien aprueba: ${input.pedido.trim()}` : "",
     input.anterior
       ? `\nEs un REHACER: proponé algo claramente distinto (otras tomas, otro gancho). Anterior → gancho "${input.anterior.gancho}" · idea: ${input.anterior.idea}`

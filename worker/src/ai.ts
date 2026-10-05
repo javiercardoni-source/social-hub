@@ -152,6 +152,8 @@ export async function writeCaption(opts: {
       ? "CLIMA DE HOY (dato real). Usalo SOBRE TODO en overlay_clima (la frase de la historia). En el texto del post, " +
         "solo si suma natural. Nunca prometas nada por el clima ('llegamos aunque llueva' NO):\n" + opts.clima
       : "No hay clima para usar hoy: overlay_clima vacío y no menciones el clima.",
+    // Estilo de las referencias del formato: la frase sobre la imagen sigue al de posts o al de historias.
+    opts.postType === "story" ? opts.brand.estilos?.historia ?? "" : opts.postType === "reel" ? "" : opts.brand.estilos?.post ?? "",
     opts.request?.trim() ? opts.request.trim() : "",
     opts.previous
       ? `Es un REHACER: proponé algo claramente distinto a la versión anterior (otro enfoque y otras palabras). ` +
@@ -270,6 +272,8 @@ export async function analyzeReference(opts: {
   duracion: number | null
   cortes: number[] | null
   nota: string | null
+  /** Para qué formato es la referencia: cambia en qué se fija la ficha. */
+  para?: "post" | "reel" | "historia"
 }): Promise<FichaEstilo> {
   const esVideo = opts.duracion != null
   const datos = esVideo
@@ -295,6 +299,13 @@ export async function analyzeReference(opts: {
               "Sos director de arte y editor de video. Esta es una REFERENCIA DE ESTILO que el dueño eligió para inspirar las piezas de la marca.",
               datos,
               opts.nota ? `Lo que le gusta de esta referencia: "${opts.nota}"` : "",
+              opts.para === "reel"
+                ? "Es referencia para REELS: fijate sobre todo en el ritmo de cortes, la duración de cada toma, los planos, los movimientos de cámara, las transiciones, cuándo y cómo entra el texto y la estructura en el tiempo (gancho, desarrollo, cierre)."
+                : opts.para === "historia"
+                  ? "Es referencia para HISTORIAS de Instagram: fijate en cuánto texto lleva y dónde, el tamaño, el fondo, si usa stickers o encuestas, el llamado a la acción y qué idea única comunica."
+                  : opts.para === "post"
+                    ? "Es referencia para POSTS de feed: fijate en la composición y el encuadre del producto, la tipografía y su jerarquía, cuánto texto lleva y dónde, los colores y el uso del logo."
+                    : "",
               "Armá la ficha de estilo. Reglas: describí lo que se VE (no inventes sonido ni cosas fuera de cuadro); los movimientos " +
                 "de cámara deducilos comparando cuadros seguidos y decí 'probable' si no es claro; la tipografía describila por estilo y " +
                 "nombrá la tipografía gratuita (Google Fonts) más parecida; nunca propongas alterar el producto de la marca.",
@@ -329,7 +340,8 @@ export async function writeHolidayPhrase(opts: { db: SupabaseClient; model: stri
           `Escribí la frase de una historia de Instagram para el feriado "${opts.feriado}".\n` +
           `Consigna: ${opts.consigna}\n` +
           "Reglas: castellano rioplatense y en la voz de la marca; neutral (nada de política, religión ni opiniones sobre la fecha); " +
-          "no inventes horarios, promos ni precios; máximo 60 caracteres.",
+          "no inventes horarios, promos ni precios; máximo 60 caracteres." +
+          (opts.brand.estilos?.historia ? `\n\n${opts.brand.estilos.historia}` : ""),
       },
     ],
     output_config: { format: zodOutputFormat(FraseFeriado) },
@@ -493,7 +505,7 @@ export async function planReel(opts: {
               ? { type: "text" as const, text: b.texto }
               : { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.jpg.toString("base64") } },
           ),
-          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior }) },
+          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel }) },
         ],
       },
     ],
@@ -519,7 +531,8 @@ export async function writeClimaPhrase(opts: { db: SupabaseClient; model: string
           "Escribí la frase de una historia de Instagram sobre el clima de hoy.\n" +
           `Consigna: ${opts.consigna}\n` +
           "Reglas: castellano rioplatense y en la voz de la marca; nunca prometas tiempos de entrega ni rapidez; " +
-          "no inventes horarios, promos ni precios; máximo 60 caracteres.",
+          "no inventes horarios, promos ni precios; máximo 60 caracteres." +
+          (opts.brand.estilos?.historia ? `\n\n${opts.brand.estilos.historia}` : ""),
       },
     ],
     output_config: { format: zodOutputFormat(FraseFeriado) },
