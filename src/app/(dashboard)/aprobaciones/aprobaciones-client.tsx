@@ -706,7 +706,9 @@ function GrupoCard({ g }: { g: Grupo }) {
           {/* Rechazo con motivo: queda guardado y la IA lo lee para no repetirlo */}
           {rechazo.open && !resuelto[p.id] && (
             <div className="space-y-2 rounded-xl border border-red-200 bg-red-50/60 p-3 dark:border-red-900 dark:bg-red-950/30">
-              <p className="text-sm font-semibold">¿Por qué no va? El motor aprende de esto.</p>
+              <p className="text-sm font-semibold">
+                {rechazo.todos && pendientes.length > 1 ? `Rechazar las ${pendientes.length} piezas de esta subida.` : `Rechazar ${label(p).toLowerCase()}.`} ¿Por qué no va? El motor aprende de esto.
+              </p>
               <div className="flex flex-wrap gap-1.5">
                 {MOTIVOS.map((m) => {
                   const on = rechazo.motivos.includes(m.id)
@@ -734,28 +736,26 @@ function GrupoCard({ g }: { g: Grupo }) {
               {(rechazo.motivos.includes("foto") || rechazo.motivos.includes("ia")) && (
                 <p className="text-xs text-muted-foreground">Esa foto o video sale del Archivo y no se vuelve a proponer.</p>
               )}
-              {pendientes.length > 1 && (
-                <label className="flex items-center gap-1.5 text-xs">
-                  <input type="checkbox" checked={rechazo.todos} onChange={(e) => setRechazo((r) => ({ ...r, todos: e.target.checked }))} />
-                  Rechazar también los otros {pendientes.length - 1} formatos de esta subida
-                </label>
-              )}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  className="gap-1 bg-red-600 hover:bg-red-700"
-                  disabled={pending || !!validarRechazo(rechazo.motivos, rechazo.nota)}
-                  onClick={() =>
-                    run(async () => {
-                      await rechazarPost(p.id, rechazo.motivos, rechazo.nota, rechazo.todos)
-                      const ids = rechazo.todos ? pendientes.map((x) => x.id) : [p.id]
-                      setResuelto((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, "rechazado" as const])) }))
-                      setRechazo({ open: false, motivos: [], nota: "", todos: false })
-                    })
-                  }
-                >
-                  <XCircle className="h-3.5 w-3.5" /> Rechazar
-                </Button>
+              <div className="flex flex-wrap gap-2">
+                {(pendientes.length > 1 ? [rechazo.todos, !rechazo.todos] : [false]).map((todos) => (
+                  <Button
+                    key={String(todos)}
+                    size="sm"
+                    variant={todos === rechazo.todos ? "default" : "outline"}
+                    className={cn("gap-1", todos === rechazo.todos ? "bg-red-600 hover:bg-red-700" : "text-red-600 hover:bg-red-50")}
+                    disabled={pending || !!validarRechazo(rechazo.motivos, rechazo.nota)}
+                    onClick={() =>
+                      run(async () => {
+                        await rechazarPost(p.id, rechazo.motivos, rechazo.nota, todos)
+                        const ids = todos ? pendientes.map((x) => x.id) : [p.id]
+                        setResuelto((r) => ({ ...r, ...Object.fromEntries(ids.map((id) => [id, "rechazado" as const])) }))
+                        setRechazo({ open: false, motivos: [], nota: "", todos: false })
+                      })
+                    }
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> {todos ? `Rechazar las ${pendientes.length}` : `Rechazar solo ${label(p).toLowerCase()}`}
+                  </Button>
+                ))}
                 <Button size="sm" variant="ghost" onClick={() => setRechazo((r) => ({ ...r, open: false }))}>
                   Cancelar
                 </Button>
@@ -777,16 +777,28 @@ function GrupoCard({ g }: { g: Grupo }) {
                   className="gap-1 text-red-600 hover:bg-red-50"
                   disabled={pending}
                   aria-expanded={rechazo.open}
-                  onClick={() => setRechazo((r) => ({ ...r, open: !r.open }))}
+                  onClick={() => setRechazo((r) => ({ ...r, open: !(r.open && !r.todos), todos: false }))}
                 >
                   <XCircle className="h-3.5 w-3.5" /> Rechazar
                 </Button>
               </>
             )}
             {pendientes.length > 1 && (
-              <Button size="sm" variant="secondary" className="ml-auto gap-1" disabled={pending} onClick={() => run(() => aprobar(pendientes.map((x) => x.id)))}>
-                <CheckCheck className="h-3.5 w-3.5" /> Aprobar las {pendientes.length}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto gap-1 text-red-600 hover:bg-red-50"
+                  disabled={pending}
+                  aria-expanded={rechazo.open && rechazo.todos}
+                  onClick={() => setRechazo((r) => ({ ...r, open: true, todos: true }))}
+                >
+                  <XCircle className="h-3.5 w-3.5" /> Rechazar las {pendientes.length}
+                </Button>
+                <Button size="sm" variant="secondary" className="gap-1" disabled={pending} onClick={() => run(() => aprobar(pendientes.map((x) => x.id)))}>
+                  <CheckCheck className="h-3.5 w-3.5" /> Aprobar las {pendientes.length}
+                </Button>
+              </>
             )}
           </div>
         </div>
