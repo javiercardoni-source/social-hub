@@ -37,7 +37,7 @@ const TTL = 6 * 3600
  * La vitrina pedida. `slug` vacío = la vigente de la marca. Una retirada (o inexistente con la
  * marca bien) devuelve { redirigir } a la vigente: ningún link compartido termina en error.
  */
-export async function cargarVitrina(marcaSlug: string, slug: string | null): Promise<{ vitrina: VitrinaPublica } | { redirigir: true } | null> {
+export async function cargarVitrina(marcaSlug: string, slug: string | null): Promise<{ vitrina: VitrinaPublica } | { redirigir: true } | { sinVitrina: { nombre: string } } | null> {
   if (!/^[a-z0-9-]{2,40}$/.test(marcaSlug) || (slug && !/^[a-z0-9-]{6,80}$/.test(slug))) return null
   const db = createAdminClient()
   const { data: marca } = await db.from("cos_brands").select("id, slug, name, color").eq("slug", marcaSlug).eq("active", true).maybeSingle()
@@ -47,9 +47,10 @@ export async function cargarVitrina(marcaSlug: string, slug: string | null): Pro
   let v = slug ? todas.find((x) => x.slug === slug) : vigente(todas)
   if (slug && (!v || v.estado === "retirada" || v.estado === "error" || v.estado === "armando")) {
     // Retirada o ya no está: al link fijo de la marca (si hay una vigente).
-    return vigente(todas) ? { redirigir: true } : null
+    return vigente(todas) ? { redirigir: true } : { sinVitrina: { nombre: marca.name } }
   }
-  if (!v || !["lista", "aprobada"].includes(v.estado)) return null
+  // La marca existe pero todavía no tiene ninguna vitrina armada: aviso claro en vez de 404.
+  if (!v || !["lista", "aprobada"].includes(v.estado)) return { sinVitrina: { nombre: marca.name } }
   v = v!
 
   const [{ data: items }, { data: logo }, { data: ig }] = await Promise.all([
@@ -92,4 +93,22 @@ export async function cargarVitrina(marcaSlug: string, slug: string | null): Pro
       })),
     },
   }
+}
+
+/** Marcas activas con su vitrina vigente (para la portada de vitrina.kitchcocenter.com). */
+export async function indiceVitrinas(): Promise<{ slug: string; nombre: string; titulo: string | null; tapa: string | null }[]> {
+  const db = createAdminClient()
+  const { data: marcas } = await db.from("cos_brands").select("id, slug, name").eq("active", true).order("name")
+  const out: { slug: string; nombre: string; titulo: string | null; tapa: string | null }[] = []
+  for (const m of marcas ?? []) {
+    const { data: vs } = await db.from("cos_vitrinas").select("id, slug, titulo, estado, created_at, approved_at").eq("brand_id", m.id)
+    const v = vigente((vs ?? []) as (VitrinaFila & { titulo: string })[])
+    let tapa: string | null = null
+    if (v) {
+      const { data: it } = await db.from("cos_vitrina_items").select("poster_key").eq("vitrina_id", v.id).order("orden").limit(1).maybeSingle()
+      if (it?.poster_key) tapa = (await db.storage.from("cos-media").createSignedUrl(it.poster_key, TTL)).data?.signedUrl ?? null
+    }
+    out.push({ slug: m.slug, nombre: m.name, titulo: v?.titulo ?? null, tapa })
+  }
+  return out
 }

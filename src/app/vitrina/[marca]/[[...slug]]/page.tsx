@@ -3,6 +3,7 @@ import { headers } from "next/headers"
 import { notFound, redirect } from "next/navigation"
 import { cargarVitrina } from "@/lib/cos/vitrina-public"
 import { VitrinaVista } from "./vitrina-vista"
+import { SinVitrina } from "../../aviso"
 
 /**
  * F11 · Vitrina pública (sin login, noindex). En vitrina.kitchcocenter.com se llega por
@@ -22,6 +23,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { marca, slug } = await params
   const r = await cargarVitrina(marca, slug?.[0] ?? null)
   const v = r && "vitrina" in r ? r.vitrina : null
+  if (r && "sinVitrina" in r) return { title: r.sinVitrina.nombre, robots: { index: false, follow: false } }
   return {
     title: v ? `${v.titulo}` : "Vitrina",
     description: v?.bajada,
@@ -37,6 +39,7 @@ export default async function VitrinaPage({ params, searchParams }: Props) {
   if (!r) notFound()
   const { e } = await searchParams
   if ("redirigir" in r) redirect(`${await base(marca)}${e ? `?e=${encodeURIComponent(e)}` : ""}`)
+  if ("sinVitrina" in r) return <SinVitrina nombre={r.sinVitrina.nombre} />
   const empleado = e && /^[A-Za-z0-9_-]{4,80}$/.test(e) ? e : null
   return <VitrinaVista v={r.vitrina} empleado={empleado} />
 }

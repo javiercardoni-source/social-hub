@@ -37,7 +37,7 @@ describe("vitrina.kitchcocenter.com", () => {
     expect(rutaVitrina("vitrina.kitchcocenter.com", "/api/vitrina/evento")).toEqual({ pasar: true })
     expect(rutaVitrina("vitrina.kitchcocenter.com", "/login")).toEqual({ rewrite: "/vitrina/login" })
     expect(rutaVitrina("vitrina.kitchcocenter.com", "/inicio/x/y")).toEqual({ noExiste: true })
-    expect(rutaVitrina("vitrina.kitchcocenter.com", "/")).toEqual({ noExiste: true })
+    expect(rutaVitrina("vitrina.kitchcocenter.com", "/")).toEqual({ rewrite: "/vitrina" })
     expect(rutaVitrina("social.kitchcocenter.com", "/inicio")).toBeNull()
   })
   it("las vitrinas son públicas en el panel también (vista previa)", () => {

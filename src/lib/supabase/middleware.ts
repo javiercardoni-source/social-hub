@@ -35,6 +35,8 @@ export const PUBLIC_PREFIXES = [
 export function rutaVitrina(host: string, pathname: string): { rewrite: string } | { pasar: true } | { noExiste: true } | null {
   if (!host.startsWith("vitrina.")) return null
   if (pathname.startsWith("/api/vitrina/")) return { pasar: true }
+  // La raíz muestra las vitrinas de todas las marcas.
+  if (pathname === "/") return { rewrite: "/vitrina" }
   if (/^\/[a-z0-9-]{2,40}(\/[a-z0-9-]{6,80})?\/?$/.test(pathname)) return { rewrite: `/vitrina${pathname}` }
   return { noExiste: true }
 }
