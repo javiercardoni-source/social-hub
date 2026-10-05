@@ -204,7 +204,11 @@ type PostPlan = {
   schedule_reason: string | null
   schedule_log: unknown[]
   cos_social_accounts: { platform: string } | null
+  cos_post_media?: { position: number; cos_asset_versions: { asset_id: string } | null }[]
 }
+
+/** La subida de un post: el archivo de su primera pieza. */
+const subidaDe = (p: PostPlan) => [...(p.cos_post_media ?? [])].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions?.asset_id ?? null
 
 async function climaFuturo(db: SupabaseClient): Promise<Map<string, ClimaCat>> {
   const { data } = await db.from("cos_weather_hourly").select("ts, code, temp, precip_mm, precip_prob").gte("ts", new Date().toISOString()).order("ts").limit(400)
@@ -257,7 +261,7 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     const reglas = await reglasDeMarca(db, b.id, clima, feriados)
     const { data: posts, error } = await db
       .from("cos_posts")
-      .select("id, account_id, status, post_type, campaign, scheduled_at, window_start, window_end, schedule_lock, schedule_source, schedule_reason, schedule_log, cos_social_accounts(platform)")
+      .select("id, account_id, status, post_type, campaign, scheduled_at, window_start, window_end, schedule_lock, schedule_source, schedule_reason, schedule_log, cos_social_accounts(platform), cos_post_media(position, cos_asset_versions(asset_id))")
       .eq("brand_id", b.id)
       .in("status", ["PENDING_APPROVAL", "APPROVED", "SCHEDULED", "PAUSED", "RETRY_SCHEDULED", "PUBLISHING", "PUBLISHED"])
       .is("deleted_at", null)
@@ -277,6 +281,17 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     // Una historia de feriado/clima pendiente cuya hora ya pasó se vence sola (no se reubica).
     const piezas = movibles.filter((p) => !(p.status === "PENDING_APPROVAL" && p.campaign && p.scheduled_at && Date.parse(p.scheduled_at) <= ahora)).map(aPieza)
     const ids = new Set(piezas.map((p) => p.id))
+    // Historia de una subida → después de su reel/post de Instagram (el de la misma cuenta y el mismo archivo).
+    for (const pz of piezas) {
+      if (pz.format !== "story" || pz.dia) continue
+      const yo = todos.find((t) => t.id === pz.id)!
+      const sub = subidaDe(yo)
+      if (!sub) continue
+      const hermano = todos.find((t) => t.id !== yo.id && t.account_id === yo.account_id && ["reel", "feed", "carousel"].includes(t.post_type) && subidaDe(t) === sub && !["CANCELLED", "REJECTED", "EXPIRED"].includes(t.status))
+      if (!hermano) continue
+      if (ids.has(hermano.id)) pz.despuesDe = hermano.id
+      else if (hermano.scheduled_at) pz.despuesDeAt = hermano.scheduled_at
+    }
     const ocupados: Ocupado[] = todos
       .filter((p) => !ids.has(p.id) && p.scheduled_at && p.status !== "PENDING_APPROVAL")
       .map((p) => ({ account: p.account_id, format: p.post_type, at: p.scheduled_at! }))

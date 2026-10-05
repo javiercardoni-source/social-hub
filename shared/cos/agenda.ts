@@ -187,6 +187,13 @@ export type Pieza = {
   ventana?: { desde: string; hasta: string }
   /** Hora actual (si ya tenía). */
   actual?: string | null
+  /**
+   * Historia de una subida: va DESPUÉS del reel/post de Instagram de la misma subida (1 a 3 h), así
+   * no compiten y la historia recuerda lo que ya está en el feed. `despuesDe` = id de ese post si
+   * también lo ubica el motor; `despuesDeAt` = su hora si ya está fijo.
+   */
+  despuesDe?: string
+  despuesDeAt?: string
 }
 export type Ocupado = { account: string; format: Formato; at: string }
 export type Asignacion = {
@@ -255,6 +262,19 @@ export function cabe(p: Pieza, at: Date, ocupados: Ocupado[], r: Reglas): string
  * No mira apertura ni horario: eso es decisión de quien la fijó. (30-09-2026: se aprobaron 9 piezas
  * de FasutoFudo con la agenda apagada y salieron las 9 en un minuto.)
  */
+/** Cuánto después de su reel/post sale la historia de la misma subida. */
+export const HISTORIA_DESPUES = { minimoMin: 60, idealMin: 90, maximoMin: 180 }
+
+/**
+ * Hora para la historia de una subida aprobada a mano: si cae a menos de 1 h de su reel/post de
+ * Instagram (antes o después), se corre a 90 min después de él.
+ */
+export function horaHistoriaManual(deseado: Date, anclas: Date[]): { at: Date; corrida: boolean } {
+  const cerca = anclas.filter((a) => Math.abs(deseado.getTime() - a.getTime()) < HISTORIA_DESPUES.minimoMin * 60_000).sort((a, b) => b.getTime() - a.getTime())[0]
+  if (!cerca) return { at: deseado, corrida: false }
+  return { at: new Date(cerca.getTime() + HISTORIA_DESPUES.idealMin * 60_000), corrida: true }
+}
+
 export function primerHuecoManual(p: { account: string; format: Formato }, deseado: Date, ocupados: Ocupado[]): { at: Date; corrido: boolean } {
   const sep = LIMITES[tipo(p.format)].separacionMin * 60_000
   const mismos = ocupados
@@ -308,8 +328,16 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
     // agenda corre cada hora, así un borrador nunca queda con su hora vencida (el reloj lo vencería).
     const minimo = new Date(r.desde.getTime() + (p.ventana ? 3 : 2) * HORA)
     const modelo = m(p)
-    const opciones = candidatos(p, r, minimo)
-      .filter((at) => !cabe(p, at, puestas, r))
+    // Historia de una subida: de 1 a 3 h después de su reel/post (si hay lugar; si no, donde quepa, pero nunca antes).
+    const ancla = p.despuesDeAt ?? (p.despuesDe ? asignadas.find((a) => a.id === p.despuesDe)?.at : undefined)
+    const enRango = (at: Date) => {
+      if (!ancla) return true
+      const d = (at.getTime() - Date.parse(ancla)) / 60_000
+      return d >= HISTORIA_DESPUES.minimoMin && d <= HISTORIA_DESPUES.maximoMin
+    }
+    const libres = candidatos(p, r, minimo).filter((at) => !cabe(p, at, puestas, r))
+    const cerca = ancla ? libres.filter(enRango) : libres
+    const opciones = (cerca.length ? cerca : ancla ? libres.filter((at) => at.getTime() >= Date.parse(ancla) + HISTORIA_DESPUES.minimoMin * 60_000) : libres)
       .map((at) => {
         const horaUtc = new Date(Math.floor(at.getTime() / HORA) * HORA).toISOString()
         const ctx: Contexto = { clima: r.clima?.get(horaUtc) ?? null, feriado: !!r.feriados?.has(enBA(at).dia) }
@@ -346,7 +374,8 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
 }
 
 function rigidez(p: Pieza): number {
-  return (p.dia ? 8 : 0) + (p.antesDelServicio ? 4 : 0) + (p.ventana ? 2 : 0) + (p.antesDe ? 1 : 0)
+  // Las historias que dependen de su reel/post van después de él (cuando ya tiene hora).
+  return (p.despuesDe ? -100 : 0) + (p.dia ? 8 : 0) + (p.antesDelServicio ? 4 : 0) + (p.ventana ? 2 : 0) + (p.antesDe ? 1 : 0)
 }
 
 /**

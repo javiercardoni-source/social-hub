@@ -13,6 +13,7 @@ import {
   pct,
   primerTurno,
   primerHuecoManual,
+  horaHistoriaManual,
   validarPropuesta,
   type Apertura,
   type ModeloAgenda,
@@ -319,5 +320,29 @@ describe("primerHuecoManual (freno anti-ráfaga de lo aprobado a mano)", () => {
       { account: "a", format: "story", at: at(100) },
     ])
     expect((r.at.getTime() - T) / 60_000).toBe(190)
+  })
+})
+
+describe("la historia de una subida va después de su reel (decisión de Javier, 05-10)", () => {
+  const post = (id: string, x: Partial<Pieza> = {}): Pieza => ({ id, account: "ig", format: "reel", ...x })
+  it("la agenda la pone de 1 a 3 h después de su reel", () => {
+    const { asignadas } = asignar([post("historia", { format: "story", despuesDe: "reel" }), post("reel")], plano, [], reglas())
+    const reel = Date.parse(asignadas.find((a) => a.id === "reel")!.at)
+    const hist = Date.parse(asignadas.find((a) => a.id === "historia")!.at)
+    expect(hist - reel).toBeGreaterThanOrEqual(60 * 60_000)
+    expect(hist - reel).toBeLessThanOrEqual(180 * 60_000)
+  })
+  it("si el reel ya está fijo, también", () => {
+    const fijo = ar(dia(2), 19).toISOString()
+    const { asignadas } = asignar([post("historia", { format: "story", despuesDeAt: fijo })], plano, [], reglas())
+    const d = Date.parse(asignadas[0].at) - Date.parse(fijo)
+    expect(d).toBeGreaterThanOrEqual(60 * 60_000)
+    expect(d).toBeLessThanOrEqual(180 * 60_000)
+  })
+  it("aprobada a mano a la misma hora que su reel: se corre 90 min", () => {
+    const reel = ar(dia(5), 17)
+    expect(horaHistoriaManual(reel, [reel])).toEqual({ at: new Date(reel.getTime() + 90 * 60_000), corrida: true })
+    const lejos = ar(dia(5), 20)
+    expect(horaHistoriaManual(lejos, [reel])).toEqual({ at: lejos, corrida: false })
   })
 })

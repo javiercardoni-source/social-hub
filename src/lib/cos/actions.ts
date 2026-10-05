@@ -3,7 +3,7 @@
 import { MOTIVOS_DE_MATERIAL, validarRechazo } from "../../../shared/cos/rechazos"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
-import { primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
+import { horaHistoriaManual, primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -190,8 +190,25 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
   const ocupados = (otros ?? [])
     .map((o) => ({ account: yo?.account_id ?? "", format: o.post_type as Formato, at: (o.published_at ?? o.scheduled_at) as string }))
     .filter((o) => !!o.at)
-  const hueco = primerHuecoManual({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, pedido, ocupados)
-  const publishNow = !hueco.corrido && (!target || target.getTime() <= Date.now() + 2 * 60_000)
+  // Historia de una subida: si cae pegada a su reel/post de Instagram (misma cuenta y archivo), va 90 min después.
+  let deseado = pedido
+  if (yo?.post_type === "story") {
+    const { data: m } = await db.from("cos_post_media").select("cos_asset_versions(asset_id)").eq("post_id", postId).order("position").limit(1).maybeSingle()
+    const sub = (m as unknown as { cos_asset_versions: { asset_id: string } | null } | null)?.cos_asset_versions?.asset_id
+    if (sub) {
+      const { data: hermanos } = await db
+        .from("cos_posts")
+        .select("scheduled_at, cos_post_media!inner(cos_asset_versions!inner(asset_id))")
+        .eq("account_id", yo.account_id)
+        .in("post_type", ["reel", "feed", "carousel"])
+        .in("status", ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "RETRY_SCHEDULED"])
+        .eq("cos_post_media.cos_asset_versions.asset_id", sub)
+      deseado = horaHistoriaManual(pedido, (hermanos ?? []).filter((h) => h.scheduled_at).map((h) => new Date(h.scheduled_at as string))).at
+    }
+  }
+  const hueco = primerHuecoManual({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, deseado, ocupados)
+  const historiaCorrida = deseado.getTime() !== pedido.getTime()
+  const publishNow = !hueco.corrido && !historiaCorrida && (!target || target.getTime() <= Date.now() + 2 * 60_000)
   const horaFinal = hueco.at
   // Hora elegida a mano: queda fijada (🔒) y sin ventana; la agenda no la mueve.
   const { error: fe } = await db
@@ -202,7 +219,9 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
       schedule_source: "manual",
       window_start: null,
       window_end: null,
-      schedule_reason: hueco.corrido
+      schedule_reason: historiaCorrida && !hueco.corrido
+        ? "La historia sale 90 min después de su reel o post, para no competir con él"
+        : hueco.corrido
         ? `Se corrió a las ${horaFinal.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" })} para no salir pegado a otra pieza de la cuenta`
         : publishNow
           ? "Apenas se aprobó"
@@ -226,7 +245,7 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
-  return { corrido: hueco.corrido, at: horaFinal.toISOString() }
+  return { corrido: hueco.corrido || historiaCorrida, at: horaFinal.toISOString() }
 }
 
 /** PENDING_APPROVAL → APPROVED (la base sella el hash) → SCHEDULED (el worker lo publica en su hora). */
