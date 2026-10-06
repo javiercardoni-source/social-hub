@@ -120,7 +120,9 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
     .eq("status", "lista")
     .order("created_at", { ascending: false })
   const de = (p: Para) => resumenEstilo((refs ?? []).filter((r) => r.para === p).map((r) => r.analysis as FichaRef), p)
-  const ritmoReel = ritmoDeReferencias((refs ?? []).filter((r) => r.para === "reel").map((r) => (r.analysis as FichaRef | null)?.medidas))
+  // Palabra por corte va siempre en ráfaga (una palabra cada medio segundo, como en el mockup que
+  // eligió Javier el 06-10); sin eso, el ritmo sale de las referencias de reel de la marca.
+  const ritmoReel = b.reel_karaoke ? "rafaga" : ritmoDeReferencias((refs ?? []).filter((r) => r.para === "reel").map((r) => (r.analysis as FichaRef | null)?.medidas))
   // Lo que el dueño rechazó en los últimos 90 días y por qué: la IA aprende de eso.
   const { data: rech } = await db
     .from("cos_posts")
