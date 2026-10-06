@@ -354,14 +354,17 @@ function FeedReferencias({ brandName, refs: todas, nota, onMsg }: { brandName: s
       <PegarLink para={para} nota={nota} onMsg={onMsg} />
 
       {/* Grilla */}
+      {/* Reels e historias son verticales: la grilla va en 9:16 para verlos enteros (en cuadrado se cortaban). */}
       <div className="grid grid-cols-3 gap-0.5 bg-border">
         <Subir kind="referencia" etiqueta={`Agregar a ${PARA_TEXTO[para]}`} multiple note={nota} para={para} tile onDone={onMsg} />
         {refs.map((x) => (
-          <div key={x.id} className="group relative aspect-square bg-muted">
+          <div key={x.id} className={cn("group relative bg-muted", para === "post" ? "aspect-square" : "aspect-[9/16]")}>
             <button type="button" onClick={() => setAbierta(x.id)} className="block h-full w-full" aria-label={`Ver ${x.name}`}>
               {x.url &&
                 (x.mime.startsWith("video/") ? (
-                  <video src={x.url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                  // #t=0.5: el navegador muestra ese cuadro de entrada. Sin eso, Safari deja en negro los videos
+                  // que no reprodujo (por eso de 5 referencias se veía una sola).
+                  <video src={`${x.url}#t=0.5`} className="h-full w-full bg-black object-contain" muted playsInline preload="metadata" />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={x.url} alt="" className="h-full w-full object-cover" loading="lazy" />
