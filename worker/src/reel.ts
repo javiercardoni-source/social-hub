@@ -22,7 +22,7 @@ import { probe, sceneCuts, withTmp, writeTmp } from "./media.ts"
 import { KITS, kitDeMarca, type KitMarca } from "./overlay.ts"
 import { exists, loadKit } from "./render.ts"
 import { planReel, type BloqueFuente } from "./ai.ts"
-import { CIERRE, FUNDIDO, CORTE, firmaReel, guionPorDefecto, lineaDeTiempo, normalizarGuion, type Fuente, type GuionReel } from "../../shared/cos/reel.ts"
+import { CIERRE, FUNDIDO, CORTE, firmaReel, guionPorDefecto, lineaDeTiempo, normalizarExcluidos, normalizarGuion, type Fuente, type GuionReel } from "../../shared/cos/reel.ts"
 import { ajustarAlPulso } from "../../shared/cos/ritmo.ts"
 import type { BrandContext } from "../../shared/cos/prompts.ts"
 
@@ -57,6 +57,9 @@ export type FuenteMedida = Fuente & { cortes: number[] }
 export async function fuentesParaGuion(db: SupabaseClient, versiones: VersionReel[]): Promise<{ fuentes: FuenteMedida[]; bloques: BloqueFuente[] }> {
   const fuentes: FuenteMedida[] = []
   const bloques: BloqueFuente[] = []
+  // Partes de cada video que Javier marcó para no usar (Aprobaciones → Video original).
+  const { data: marcas } = await db.from("cos_asset_versions").select("id, excluir").in("id", versiones.map((v) => v.id))
+  const excluidasDe = new Map((marcas ?? []).map((m) => [m.id as string, m.excluir as unknown]))
   for (const [i, v] of versiones.entries()) {
     const data = await bajar(db, v)
     await withTmp(async (dir) => {
@@ -71,12 +74,20 @@ export async function fuentesParaGuion(db: SupabaseClient, versiones: VersionRee
       }
       const dur = (info.durationMs ?? 0) / 1000
       const cortes = (await sceneCuts(f).catch(() => [] as number[])).filter((c) => c > 0.2 && c < dur - 0.2)
-      fuentes.push({ tipo: "video", duracion: dur, cortes })
+      const excluir = normalizarExcluidos(excluidasDe.get(v.id), dur)
+      fuentes.push({ tipo: "video", duracion: dur, cortes, ...(excluir.length ? { excluir } : {}) })
       const bordes = [0, ...cortes, dur]
-      const tomas = bordes.slice(0, -1).map((ini, k) => ({ ini, fin: bordes[k + 1] }))
+      // Las tomas que caen enteras en una parte excluida ni se le muestran a la IA.
+      const dentro = (ini: number, fin: number) => excluir.some(([a, b]) => ini >= a - 0.05 && fin <= b + 0.05)
+      const tomas = bordes
+        .slice(0, -1)
+        .map((ini, k) => ({ ini, fin: bordes[k + 1] }))
+        .filter((t) => !dentro(t.ini, t.fin))
       bloques.push({
         tipo: "texto",
-        texto: `Fuente ${i} · video de ${dur.toFixed(1)} s · tomas medidas: ${tomas.map((t) => `${t.ini.toFixed(1)}–${t.fin.toFixed(1)}`).join(", ")}`,
+        texto:
+          `Fuente ${i} · video de ${dur.toFixed(1)} s · tomas medidas: ${tomas.map((t) => `${t.ini.toFixed(1)}–${t.fin.toFixed(1)}`).join(", ")}` +
+          (excluir.length ? ` · NO USAR (lo marcó el dueño): ${excluir.map(([a, b]) => `${a.toFixed(1)}–${b.toFixed(1)} s`).join(", ")}` : ""),
       })
       // Máximo 6 cuadros: se reparten entre las tomas (las más largas primero si sobran).
       const elegidas = tomas.length <= 6 ? tomas : [...tomas].sort((a, b) => b.fin - b.ini - (a.fin - a.ini)).slice(0, 6).sort((a, b) => a.ini - b.ini)

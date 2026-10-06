@@ -6,7 +6,8 @@ import { LIMITES_RITMO, type Ritmo } from "./ritmo.ts"
 
 export type Movimiento = "acercar" | "alejar" | "paneo_derecha" | "paneo_izquierda"
 export type Transicion = "corte" | "fundido"
-export type Fuente = { tipo: "foto" | "video"; duracion: number | null } // duracion en s (videos)
+/** duracion en s (videos). excluir = partes del video que Javier marcó para no usar, [desde, hasta] en s. */
+export type Fuente = { tipo: "foto" | "video"; duracion: number | null; excluir?: [number, number][] }
 export type Toma = {
   fuente: number // índice en la lista de fuentes
   trim_start: number // s dentro del video (0 en fotos)
@@ -61,6 +62,44 @@ export function tieneProhibida(textoLibre: string, extra: string[] = []): boolea
 }
 
 /**
+ * Partes excluidas de un video, limpias: dentro del video, de al menos 0,1 s, ordenadas y unidas
+ * si se pisan. Lo que no se entiende se descarta.
+ */
+export function normalizarExcluidos(raw: unknown, total?: number | null): [number, number][] {
+  const tramos: [number, number][] = []
+  for (const x of Array.isArray(raw) ? raw : []) {
+    if (!Array.isArray(x) || x.length !== 2) continue
+    let [a, b] = [Number(x[0]), Number(x[1])]
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue
+    if (a > b) [a, b] = [b, a]
+    a = Math.max(0, a)
+    if (total != null) b = Math.min(total, b)
+    if (b - a >= 0.1) tramos.push([Math.round(a * 100) / 100, Math.round(b * 100) / 100])
+  }
+  tramos.sort((x, y) => x[0] - y[0])
+  const unidos: [number, number][] = []
+  for (const t of tramos) {
+    const ult = unidos[unidos.length - 1]
+    if (ult && t[0] <= ult[1]) ult[1] = Math.max(ult[1], t[1])
+    else unidos.push([...t])
+  }
+  return unidos.slice(0, 20)
+}
+
+/**
+ * Corre una toma para que no toque ninguna parte excluida: el inicio libre más cercano al que
+ * pidió la IA. null = no entra en ningún lado (se descarta la toma).
+ */
+export function ventanaLibre(trim: number, duracion: number, total: number, excluir: [number, number][] = []): number | null {
+  const choca = (t: number) => excluir.some(([a, b]) => t < b && t + duracion > a)
+  if (!choca(trim)) return trim
+  const max = total - duracion
+  const candidatos = [0, max, ...excluir.flatMap(([a, b]) => [b, a - duracion])].filter((t) => t >= 0 && t <= max + 1e-9 && !choca(t))
+  if (!candidatos.length) return null
+  return candidatos.reduce((mejor, t) => (Math.abs(t - trim) < Math.abs(mejor - trim) ? t : mejor))
+}
+
+/**
  * Deja el guion de la IA dentro de lo posible: tomas de largo razonable, dentro del video,
  * fuentes que existen, textos cortos, recuadro de la lista, combo que exista, sin palabras fuera
  * del brandbook. Tira las tomas imposibles.
@@ -86,6 +125,10 @@ export function normalizarGuion(
       if (total < (ritmo === "rafaga" ? lim.min : 0.8)) continue
       duracion = Math.min(duracion, total)
       trim = clamp(num(t.trim_start, 0), 0, Math.max(0, total - duracion))
+      // Partes que Javier marcó para no usar: la toma se corre al hueco libre más cercano.
+      const libre = ventanaLibre(trim, duracion, total, f.excluir)
+      if (libre == null) continue
+      trim = libre
     }
     tomas.push({
       fuente: i,
@@ -154,6 +197,9 @@ export function guionPorDefecto(fuentes: (Fuente & { cortes?: number[] })[], mus
       const total = f.duracion ?? 0
       const inicios = [0, ...(f.cortes ?? [])].filter((c) => c + duracion <= total)
       trim = inicios.length ? inicios[(vuelta * 2) % inicios.length] : Math.max(0, (total - duracion) / 2)
+      const libre = ventanaLibre(trim, duracion, total, f.excluir)
+      if (libre == null) continue
+      trim = libre
     }
     tomas.push({ fuente: i, trim_start: Math.round(trim * 100) / 100, duracion, movimiento: movs[n], foco_x: 0.5, foco_y: 0.5, transicion: n === 0 ? "corte" : n % 2 ? "corte" : "fundido", por_que: "Armado automático (la IA no respondió)" })
   }

@@ -4,7 +4,7 @@ import { signedUrls } from "@/lib/cos/storage"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { suggestionsFor } from "@/lib/cos/analytics"
 import { liftText } from "../../../../shared/cos/timing"
-import { lineaDeTiempo, type GuionReel } from "../../../../shared/cos/reel"
+import { lineaDeTiempo, normalizarExcluidos, type GuionReel } from "../../../../shared/cos/reel"
 import { leerDiseno, plantilla, plantillasDe, textoDiseno } from "../../../../shared/cos/plantillas"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { ListaAprobaciones, Preparando, type Grupo } from "./aprobaciones-client"
@@ -42,6 +42,8 @@ type RawPost = {
   cos_post_media: {
     position: number
     cos_asset_versions: {
+      id: string
+      excluir: [number, number][] | null
       storage_key: string | null
       mime: string | null
       width: number | null
@@ -96,7 +98,7 @@ export default async function AprobacionesPage() {
       cos_post_media(
         position,
         cos_asset_versions(
-          storage_key, mime, width, height,
+          id, excluir, storage_key, mime, width, height,
           cos_assets!cos_asset_versions_asset_id_fkey(id, thumb_key, submitted_by_label, description, quality_score, ai_json)
         )
       )
@@ -192,6 +194,19 @@ export default async function AprobacionesPage() {
       template: p.template,
       ...disenoDe(p, !!v?.mime?.startsWith("video/")),
       tapaUrl: p.tapa_key ? (urls[p.tapa_key] ?? null) : null,
+      // Videos originales del reel: para ver qué partes usó el motor y marcar las que no se usan.
+      videosFuente: p.montaje
+        ? [...p.cos_post_media]
+            .sort((a, b) => a.position - b.position)
+            .map((m, i) => ({ m, i }))
+            .filter(({ m }) => m.cos_asset_versions?.mime?.startsWith("video/") && m.cos_asset_versions.storage_key)
+            .map(({ m, i }) => ({
+              versionId: m.cos_asset_versions!.id,
+              url: urls[m.cos_asset_versions!.storage_key!] ?? null,
+              excluir: normalizarExcluidos(m.cos_asset_versions!.excluir),
+              usadas: (p.montaje!.tomas ?? []).filter((t) => t.fuente === i).map((t) => [t.trim_start, t.trim_start + t.duracion] as [number, number]),
+            }))
+        : [],
       // Por qué este tema (F7 M2), mientras siga siendo el que eligió el motor.
       musicaPorque: p.pick_json?.porque && !p.pick_json.override && [p.pick_json.final, p.pick_json.elegido].includes(p.music_key ?? "") ? p.pick_json.porque : null,
       // Horario que eligió la agenda (F8): se aprueba con su ventana.

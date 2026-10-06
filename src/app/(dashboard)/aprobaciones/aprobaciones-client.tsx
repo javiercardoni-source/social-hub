@@ -4,7 +4,7 @@ import { explicarError } from "@/lib/ui-errors"
 
 import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { aprobarPost, cambiarPlantilla, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
+import { aprobarPost, cambiarPlantilla, editarPost, guardarPartesExcluidas, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
@@ -42,6 +42,8 @@ export type PostItem = {
   plantillas: { id: string; nombre: string; para: string }[]
   /** Tapa del reel en el perfil, dibujada con la plantilla. */
   tapaUrl: string | null
+  /** Videos originales de un reel: qué partes usó el motor y cuáles marcó Javier para no usar. */
+  videosFuente: { versionId: string; url: string | null; excluir: [number, number][]; usadas: [number, number][] }[]
 }
 
 const TEMPLATES = [
@@ -98,8 +100,10 @@ function frameFor(p: PostItem, w: number | null, h: number | null): { ratio: num
  * Video de la vista previa. Arranca silenciado (el navegador no deja reproducir con audio
  * solo); el sonido se activa desde la fila «Sonido original» de Música, sin tapar la pieza.
  */
-function VideoConSonido({ src, className, sonido }: { src: string; className?: string; sonido: boolean }) {
+function VideoConSonido({ src, className, videoClass, sonido }: { src: string; className?: string; videoClass?: string; sonido: boolean }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const [t, setT] = useState(0)
+  const [dur, setDur] = useState(0)
   useEffect(() => {
     const v = ref.current
     if (!v) return
@@ -109,7 +113,111 @@ function VideoConSonido({ src, className, sonido }: { src: string; className?: s
       void v.play().catch(() => {})
     }
   }, [sonido])
-  return <video ref={ref} src={src} className={className} muted playsInline autoPlay loop />
+  // Barra de tiempo: cuánto dura la pieza y dónde va. Tocándola se salta a ese momento.
+  const saltar = (e: React.MouseEvent<HTMLDivElement>) => {
+    const v = ref.current
+    if (!v || !dur) return
+    const r = e.currentTarget.getBoundingClientRect()
+    v.currentTime = Math.max(0, Math.min(dur, ((e.clientX - r.left) / r.width) * dur))
+  }
+  return (
+    <div className={cn("relative", className)}>
+      <video
+        ref={ref}
+        src={src}
+        className={videoClass}
+        muted
+        playsInline
+        autoPlay
+        loop
+        onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => setT(e.currentTarget.currentTime)}
+        onClick={(e) => (e.currentTarget.paused ? void e.currentTarget.play() : e.currentTarget.pause())}
+      />
+      {dur > 0 && (
+        <>
+          <span className="pointer-events-none absolute bottom-3 right-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white">
+            {reloj(t)} / {reloj(dur)}
+          </span>
+          <div role="slider" aria-label="Tiempo del video" aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(t)} tabIndex={0} onClick={saltar} className="absolute inset-x-0 bottom-0 h-2 cursor-pointer bg-white/25">
+            <div className="h-full bg-white" style={{ width: `${(t / dur) * 100}%` }} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** 0:04 · 1:12 */
+const reloj = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`
+
+/**
+ * Video original de un reel: la línea de tiempo muestra en verde lo que usó el motor y en rojo lo
+ * que Javier marcó para no usar. Las marcas quedan en el video: todo reel que salga de él las evita.
+ */
+function PartesVideo({ v, marcas, onCambio, deshabilitado }: { v: PostItem["videosFuente"][number]; marcas: [number, number][]; onCambio: (m: [number, number][]) => void; deshabilitado: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  const [t, setT] = useState(0)
+  const [dur, setDur] = useState(0)
+  const [desde, setDesde] = useState<number | null>(null)
+  const pct = (x: number) => `${(x / (dur || 1)) * 100}%`
+  const tramo = ([a, b]: [number, number], color: string, k: string) => <span key={k} className={cn("absolute inset-y-0", color)} style={{ left: pct(a), width: pct(Math.max(0, b - a)) }} />
+  if (!v.url) return null
+  return (
+    <div className="space-y-2">
+      <video ref={ref} src={v.url} controls playsInline muted preload="metadata" className="max-h-72 w-full rounded-lg bg-black" onLoadedMetadata={(e) => setDur(e.currentTarget.duration || 0)} onTimeUpdate={(e) => setT(e.currentTarget.currentTime)} />
+      {dur > 0 && (
+        <>
+          <div
+            className="relative h-5 cursor-pointer overflow-hidden rounded bg-muted"
+            title="Verde: lo que usa el reel · Rojo: lo que no se usa"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              if (ref.current) ref.current.currentTime = ((e.clientX - r.left) / r.width) * dur
+            }}
+          >
+            {v.usadas.map((u, k) => tramo(u, "bg-emerald-500/70", `u${k}`))}
+            {marcas.map((m, k) => tramo(m, "bg-red-500/80", `x${k}`))}
+            {desde != null && tramo([Math.min(desde, t), Math.max(desde, t)], "bg-red-500/40", "nuevo")}
+            <span className="absolute inset-y-0 w-0.5 bg-foreground" style={{ left: pct(t) }} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="tabular-nums text-muted-foreground">
+              {reloj(t)} / {reloj(dur)}
+            </span>
+            {desde == null ? (
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={deshabilitado} onClick={() => setDesde(t)}>
+                Desde acá no usar
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 border-red-300 text-xs text-red-700"
+                disabled={deshabilitado}
+                onClick={() => {
+                  const a = Math.min(desde, t)
+                  const b = Math.max(desde, t)
+                  if (b - a >= 0.1) onCambio([...marcas, [Math.round(a * 10) / 10, Math.round(b * 10) / 10]])
+                  setDesde(null)
+                }}
+              >
+                Hasta acá ({reloj(Math.min(desde, t))}–{reloj(Math.max(desde, t))})
+              </Button>
+            )}
+            {marcas.map(([a, b], k) => (
+              <span key={k} className="flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 font-semibold text-red-700">
+                {reloj(a)}–{reloj(b)}
+                <button type="button" aria-label="Volver a usar esta parte" disabled={deshabilitado} onClick={() => onCambio(marcas.filter((_, j) => j !== k))}>
+                  <XCircle className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function Media({ g, p, ratio, fill, sonido }: { g: Grupo; p: PostItem; ratio: number; fill: boolean; sonido: boolean }) {
@@ -117,7 +225,7 @@ function Media({ g, p, ratio, fill, sonido }: { g: Grupo; p: PostItem; ratio: nu
   if (p.renderUrl) {
     // Un reel armado con una foto es video aunque el original sea foto.
     return /\.mp4(\?|$)/.test(p.renderUrl) ? (
-      <VideoConSonido src={p.renderUrl} className="block w-full" sonido={sonido} />
+      <VideoConSonido src={p.renderUrl} className="block w-full" videoClass="block w-full" sonido={sonido} />
     ) : (
       // eslint-disable-next-line @next/next/no-img-element
       <img src={p.renderUrl} alt="" className="block w-full" />
@@ -130,7 +238,7 @@ function Media({ g, p, ratio, fill, sonido }: { g: Grupo; p: PostItem; ratio: nu
   return (
     <div className={cn("relative w-full overflow-hidden", g.isVideo && fill ? "bg-black" : "bg-neutral-100")} style={{ aspectRatio: ratio }}>
       {g.isVideo ? (
-        <VideoConSonido src={g.mediaUrl} className={fg} sonido={sonido} />
+        <VideoConSonido src={g.mediaUrl} className="absolute inset-0" videoClass={cn("h-full w-full", fill ? "object-contain" : "object-cover")} sonido={sonido} />
       ) : (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -262,6 +370,20 @@ function GrupoCard({ g }: { g: Grupo }) {
     musica: false,
     trabajando: false,
   })
+
+  // Partes de los videos originales que no se usan (por versión de archivo).
+  const [partes, setPartes] = useState<Record<string, [number, number][]>>(() =>
+    Object.fromEntries(g.posts.flatMap((x) => x.videosFuente.map((v) => [v.versionId, v.excluir]))),
+  )
+  const partesCambiadas = (x: PostItem) => x.videosFuente.some((v) => JSON.stringify(partes[v.versionId] ?? []) !== JSON.stringify(v.excluir))
+  function guardarPartes(x: PostItem) {
+    run(async () => {
+      for (const v of x.videosFuente) if (JSON.stringify(partes[v.versionId] ?? []) !== JSON.stringify(v.excluir)) await guardarPartesExcluidas(v.versionId, partes[v.versionId] ?? [])
+      // Se rehace el reel de esta subida (reel, historia y Facebook comparten el video).
+      await rehacerConIA(g.posts.filter((y) => y.reel && !resuelto[y.id]).map((y) => y.id), "No uses las partes del video que marqué en rojo.", false, false)
+      setRehacer((r) => ({ ...r, trabajando: true }))
+    })
+  }
 
   const pendientes = g.posts.filter((p) => !resuelto[p.id])
   const p = g.posts.find((x) => x.id === active) ?? g.posts[0]
@@ -484,6 +606,20 @@ function GrupoCard({ g }: { g: Grupo }) {
                   ))}
                 </ol>
               </details>
+              {p.videosFuente.length > 0 && (
+                <details className="rounded-xl border px-3 py-2 text-xs" open={partesCambiadas(p)}>
+                  <summary className="cursor-pointer font-semibold">Video original · marcar partes que no se usan</summary>
+                  <div className="mt-2 space-y-3">
+                    <p className="text-muted-foreground">En verde, lo que usa este reel. Poné el video donde empieza la parte que no querés, tocá «Desde acá no usar», avanzá y tocá «Hasta acá». Queda guardado en el video: ningún reel que salga de él va a usar esas partes.</p>
+                    {p.videosFuente.map((v) => (
+                      <PartesVideo key={v.versionId} v={v} marcas={partes[v.versionId] ?? []} onCambio={(m) => setPartes((x) => ({ ...x, [v.versionId]: m }))} deshabilitado={pending || !!resuelto[p.id]} />
+                    ))}
+                    <Button size="sm" disabled={!partesCambiadas(p) || pending || !!resuelto[p.id]} onClick={() => guardarPartes(p)}>
+                      {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Guardar y rehacer el reel
+                    </Button>
+                  </div>
+                </details>
+              )}
             </div>
           )}
 

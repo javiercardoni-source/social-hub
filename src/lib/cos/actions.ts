@@ -2,6 +2,7 @@
 
 import { MOTIVOS_DE_MATERIAL, validarRechazo } from "../../../shared/cos/rechazos"
 import { plantilla } from "../../../shared/cos/plantillas"
+import { normalizarExcluidos } from "../../../shared/cos/reel"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
 import { horaHistoriaManual, primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
@@ -391,6 +392,21 @@ export async function rehacerConIA(postIds: string[], pedido: string, otroDiseno
     },
   })
   if (je) throw aviso(`No se pudo pedir: ${je.message}`)
+}
+
+// ── partes de un video que no se usan (06-10-2026) ───────────────────────────
+
+/**
+ * Guarda los tramos de un video que Javier no quiere que el motor use. Quedan en la versión del
+ * archivo: todos los reels que salgan de ese video los evitan (shared/cos/reel.ts → ventanaLibre).
+ */
+export async function guardarPartesExcluidas(versionId: string, tramos: [number, number][]) {
+  await requireMember("editor")
+  if (!/^[0-9a-f-]{36}$/.test(versionId)) throw aviso("Video inválido")
+  const excluir = normalizarExcluidos(tramos)
+  const { error } = await createAdminClient().from("cos_asset_versions").update({ excluir }).eq("id", versionId)
+  if (error) throw aviso(`No se pudo guardar: ${error.message}`)
+  return { tramos: excluir.length }
 }
 
 // ── plantillas propias por marca (06-10-2026) ───────────────────────────────
