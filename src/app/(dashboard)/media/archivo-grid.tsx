@@ -3,9 +3,9 @@
 import { useState, useTransition } from "react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
-import { Check, Clapperboard, Loader2 } from "lucide-react"
+import { Check, CheckCheck, Clapperboard, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { armarReelConVarias, descartarVarios, recuperarVarios } from "@/lib/cos/actions"
+import { armarReelConVarias, descartarVarios, recuperarVarios, usarVarios } from "@/lib/cos/actions"
 import { explicarError } from "@/lib/ui-errors"
 import { cn } from "@/lib/utils"
 import { ArchivoAcciones } from "./archivo-client"
@@ -59,6 +59,26 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
     })
   }
 
+  // «Usar» de todas las marcadas: cada una arma su reel y sus posts (como el «Usar» de cada ficha).
+  const paraUsar = sel.filter((id) => {
+    const it = items.find((i) => i.id === id)
+    return !!it && listas.has(id) && it.consent !== "blocked" && it.review_status !== "approved"
+  })
+  function usarMarcadas() {
+    setMsg(null)
+    start(async () => {
+      try {
+        const r = await usarVarios(paraUsar)
+        const extra = [r.bloqueadas ? `${r.bloqueadas} con caras (piden permiso una por una)` : "", r.analizando ? `${r.analizando} todavía analizándose` : ""].filter(Boolean).join(" · ")
+        setMsg(`Armando borradores de ${r.usadas}: van apareciendo en Aprobaciones${extra ? ` · Quedaron afuera: ${extra}` : ""}`)
+        setSel(new Set())
+        router.refresh()
+      } catch (e) {
+        setMsg(explicarError(e))
+      }
+    })
+  }
+
   const toggle = (id: string) =>
     setSel((s) => {
       const n = new Set(s)
@@ -99,8 +119,19 @@ export function ArchivoGrid({ items, estado }: { items: ArchivoItem[]; estado: "
           {estado === "pendientes" && (
             <Button
               size="sm"
-              variant="outline"
               className="ml-auto"
+              disabled={!paraUsar.length || pending}
+              title="Usar todas las marcadas que ya están analizadas: cada una arma su reel y sus posts"
+              onClick={usarMarcadas}
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Usar {paraUsar.length ? `las ${paraUsar.length}` : "marcadas"}
+            </Button>
+          )}
+          {estado === "pendientes" && (
+            <Button
+              size="sm"
+              variant="outline"
               disabled={paraReel.length < 2 || paraReel.length > 8 || pending}
               title="Un reel con las piezas marcadas, en el orden en que las tocaste (2 a 8, ya analizadas)"
               onClick={armarReel}

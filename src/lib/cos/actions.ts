@@ -476,6 +476,34 @@ export async function usarDelArchivo(assetId: string) {
 }
 
 /**
+ * «Usar» de varias juntas (Biblioteca): las marcadas que ya están analizadas pasan a elegidas y
+ * cada una arma sus borradores. Las que tienen caras quedan afuera (piden permiso una por una) y
+ * las que todavía se analizan se avisan para usarlas después.
+ */
+export async function usarVarios(assetIds: string[]) {
+  await requireMember("editor")
+  const ids = [...new Set(assetIds)].filter((id) => UUID.test(id))
+  if (!ids.length) throw aviso("No hay nada seleccionado")
+  if (ids.length > 60) throw aviso("Son muchas de una vez: usá hasta 60 (cada una arma su reel y sus posts)")
+  const db = createAdminClient()
+  const { data: todas, error: le } = await db.from("cos_assets").select("id, consent, status, review_status").in("id", ids)
+  if (le) throw aviso(`No se pudieron leer: ${le.message}`)
+  const bloqueadas = (todas ?? []).filter((a) => a.consent === "blocked").length
+  const listas = (todas ?? []).filter((a) => a.consent !== "blocked" && ["READY", "IN_USE"].includes(a.status) && ["pending", "approved"].includes(a.review_status)).map((a) => a.id)
+  const analizando = ids.length - bloqueadas - listas.length
+  if (listas.length) {
+    const { error } = await db.from("cos_assets").update({ review_status: "approved" }).in("id", listas)
+    if (error) throw aviso(`No se pudieron marcar: ${error.message}`)
+    for (const id of listas) {
+      const { error: je } = await db.rpc("cos_enqueue_job", { p_type: "post:draft", p_payload: { asset_id: id }, p_dedupe_key: `draft:${id}` })
+      if (je) throw aviso(`No se pudieron pedir los borradores: ${je.message}`)
+    }
+  }
+  revalidatePath("/media")
+  return { usadas: listas.length, bloqueadas, analizando }
+}
+
+/**
  * Javier confirma que hay permiso para publicar a las personas que aparecen (la IA lo había
  * bloqueado por caras). Queda en la auditoría quién lo confirmó. Si ya estaba elegido del
  * Archivo o vino de la cocina, se arman los borradores.
