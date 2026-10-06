@@ -60,12 +60,22 @@ export function brandSystemPrompt(b: BrandContext): string {
       : "- Nunca inventes precios, promociones, descuentos ni horarios distintos al real.",
     `- Palabras prohibidas para esta marca: ${prohibidas}.`,
     "- Distinguí siempre lo que DICE el empleado de lo que SE VE en la imagen.",
+    VOCABULARIO_AR,
     "",
     "Voz y contexto de la marca (sale del knowledge-base):",
     b.toneMd.trim() || "(todavía no cargado: usá un tono argentino, informal y cercano, con emojis moderados)",
     b.lecciones?.trim() ? `\n${b.lecciones.trim()}` : "",
   ].join("\n")
 }
+
+/**
+ * Español de Argentina (Javier, 06-10-2026: "en el mercado argentino no se dice avocado, se dice
+ * palta"). Va en todo lo que escribe la IA, también en la descripción de las fotos (de ahí lo copian
+ * los textos).
+ */
+export const VOCABULARIO_AR =
+  "- Español de Argentina: palta (nunca avocado ni aguacate), frutilla (no fresa), langostino (no camarón), " +
+  "verdeo (no cebollín). Un producto del menú se nombra tal cual figura en los datos de la marca."
 
 export function classifierPrompt(input: {
   description: string
@@ -88,6 +98,7 @@ export function classifierPrompt(input: {
       : "Es una FOTO.",
     "",
     "Devolvé la clasificación. Criterios:",
+    VOCABULARIO_AR,
     "- summary: una línea, qué es.",
     "- products: solo productos que el empleado nombra o que se ven con claridad.",
     "- quality_score 0-100: foco, luz, encuadre, que el producto se vea apetitoso.",
