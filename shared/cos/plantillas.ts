@@ -8,7 +8,8 @@
  * Sin dependencias: lo usan el worker (Node 24) y la app.
  */
 
-export type FormatoDiseno = "feed" | "story"
+/** feed y story son de redes; impresion = piezas para la imprenta (Diseño gráfico). */
+export type FormatoDiseno = "feed" | "story" | "impresion"
 
 export type ClaveCampo = (typeof CLAVES_CAMPO)[number]
 
@@ -162,6 +163,26 @@ export const PLANTILLAS: Plantilla[] = [
   },
 ]
 
+/**
+ * Plantillas de imprenta (Diseño gráfico): sirven para cualquier marca (marca "*") y se dibujan con
+ * su paleta y sus tipografías. Además de estas, en imprenta se pueden usar las de feed de la marca.
+ */
+export const PLANTILLAS_IMPRESION: Plantilla[] = [
+  {
+    id: "imp_pedido",
+    marca: "*",
+    formato: "impresion",
+    nombre: "Pedido por WhatsApp",
+    para: "Imanes y etiquetas: foto, la marca, el WhatsApp bien grande y un QR que abre el chat.",
+    campos: [
+      { clave: "titulo", max: 30, ayuda: "frase corta arriba del número (ej. Sushi a domicilio)", opcional: true },
+      { clave: "linea", max: 22, ayuda: "el número de WhatsApp tal cual se marca" },
+      { clave: "pie", max: 60, ayuda: "días y horario", opcional: true },
+    ],
+    fotos: 1,
+  },
+]
+
 /** El pedido que va al pie de la pieza (fijo por marca: la IA no lo cambia). */
 export const CTA_MARCA: Record<string, string> = {
   bijutsukan: "PEDÍ POR MENSAJE",
@@ -179,7 +200,12 @@ export type Diseno = {
 }
 
 export function plantilla(id: string): Plantilla | null {
-  return PLANTILLAS.find((p) => p.id === id) ?? null
+  return PLANTILLAS.find((p) => p.id === id) ?? PLANTILLAS_IMPRESION.find((p) => p.id === id) ?? null
+}
+
+/** Plantillas que se pueden usar en una pieza de imprenta de la marca: las de imprenta + sus de feed. */
+export function plantillasImpresion(marca: string, habilitadas: string[]): Plantilla[] {
+  return [...PLANTILLAS_IMPRESION, ...plantillasDe(marca, "feed", habilitadas)]
 }
 
 /** Las plantillas habilitadas de una marca para un formato (en el orden del catálogo). */

@@ -19,6 +19,7 @@ import {
   BarChart3,
   LayoutGrid,
   Megaphone,
+  Printer,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { elegirMarca } from "@/lib/cos/brand-actions"
@@ -60,6 +61,7 @@ export function SidebarClient({ brands, activeSlug, pendingCount, mediaCount, ad
     { name: "Feed", href: "/feed", icon: LayoutGrid },
     { name: "Métricas", href: "/analytics", icon: BarChart3 },
     { name: "Anuncios", href: "/anuncios", icon: Megaphone, count: adsCount > 0 ? adsCount : null },
+    { name: "Diseño gráfico", href: "/diseno", icon: Printer },
     { name: "Cuentas", href: "/accounts", icon: Link2 },
     { name: "Marca", href: "/marca", icon: Palette },
   ]

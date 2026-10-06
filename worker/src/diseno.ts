@@ -31,7 +31,18 @@ const mayus = (s = "") => s.toUpperCase()
 const entra = (texto: string, ancho: number, max: number, factor = 0.6) => Math.min(max, ancho / Math.max(1, texto.length * factor))
 
 /** La pieza dibujada (PNG). `fotos[0]` es la del post; el resto, otras de la marca (grilla). */
-export async function renderDiseno(opts: { diseno: Diseno; marca: string; fotos: string[]; kit: KitDiseno; width: number; height: number }): Promise<Buffer> {
+export async function renderDiseno(opts: {
+  diseno: Diseno
+  marca: string
+  fotos: string[]
+  kit: KitDiseno
+  width: number
+  height: number
+  /** QR (data URI de un PNG) para las piezas de imprenta. */
+  qr?: string
+  /** Nombre de la marca para las piezas que lo escriben (imprenta). */
+  nombreMarca?: string
+}): Promise<Buffer> {
   const { diseno, marca, kit, width: W, height: H } = opts
   const p = plantilla(diseno.plantilla)
   if (!p) throw new Error(`plantilla desconocida: ${diseno.plantilla}`)
@@ -196,6 +207,40 @@ export async function renderDiseno(opts: { diseno: Diseno; marca: string; fotos:
         ]),
       ]
       break
+    case "imp_pedido": {
+      // Imán / etiqueta: foto arriba, abajo la marca, la frase, el WhatsApp grande y el QR.
+      // Va calculado sobre el lado corto, así sirve vertical u horizontal.
+      const horizontal = W > H
+      const corto = Math.min(W, H)
+      const v = corto / 100
+      const fotoAlto = horizontal ? H : H * 0.5
+      const fotoAncho = horizontal ? W * 0.45 : W
+      const qrLado = 24 * v
+      const nombre = mayus(opts.nombreMarca ?? marca)
+      const zona = { left: horizontal ? fotoAncho : 0, top: horizontal ? 0 : fotoAlto, width: horizontal ? W - fotoAncho : W, height: horizontal ? H : H - fotoAlto }
+      const pad = 7 * v
+      hijos = [
+        fondo(P.fondo),
+        abs({ left: 0, top: 0, width: fotoAncho, height: fotoAlto, overflow: "hidden" }, [img(foto)]),
+        abs({ ...zona, flexDirection: "column", justifyContent: "space-between", padding: pad }, [
+          el({ flexDirection: "column" }, [
+            el({ fontFamily: T, fontSize: entra(nombre, zona.width - 2 * pad, 9 * v, 0.7), letterSpacing: "0.06em", color: P.titulo, lineHeight: 1 }, nombre),
+            ...(c.titulo ? [el({ fontFamily: A, fontSize: 6 * v, color: conAlfa(P.titulo, 0.85), marginTop: 1.5 * v, lineHeight: 1.1 }, c.titulo)] : []),
+          ]),
+          el({ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" }, [
+            el({ flexDirection: "column", flexShrink: 1, marginRight: 3 * v }, [
+              el({ fontFamily: X, fontSize: 4 * v, letterSpacing: "0.14em", color: P.acento === P.fondo ? P.titulo : P.acento }, "PEDÍ POR WHATSAPP"),
+              el({ fontFamily: T, fontSize: entra(c.linea ?? "", zona.width - 2 * pad - qrLado - 3 * v, 8.5 * v, 0.58), color: P.titulo, marginTop: 1 * v, lineHeight: 1.05 }, c.linea ?? ""),
+              ...(c.pie ? [el({ fontFamily: X, fontSize: 3.4 * v, color: conAlfa(P.titulo, 0.75), marginTop: 1.6 * v, lineHeight: 1.25 }, c.pie)] : []),
+            ]),
+            ...(opts.qr
+              ? [el({ width: qrLado, height: qrLado, flexShrink: 0, backgroundColor: "#ffffff", padding: 1.4 * v, borderRadius: 1.5 * v }, [{ type: "img", props: { src: opts.qr, style: { width: "100%", height: "100%" } } } as El])]
+              : []),
+          ]),
+        ]),
+      ]
+      break
+    }
     default:
       throw new Error(`plantilla sin dibujo: ${p.id}`)
   }
