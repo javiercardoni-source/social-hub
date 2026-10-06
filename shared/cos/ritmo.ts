@@ -59,7 +59,7 @@ export type PerfilMusical = { n: number; bpm: number | null; bpmMin: number | nu
 
 export function perfilMusical(ms: MusicaRef[]): PerfilMusical {
   const val = ms.filter((m): m is NonNullable<MusicaRef> => !!m)
-  const bpms = val.filter((m) => m.bpm && (m.confianza ?? 1) >= 0.3).map((m) => m.bpm as number).sort((a, b) => a - b)
+  const bpms = val.filter((m) => m.bpm && (m.confianza ?? 1) >= 0.15).map((m) => m.bpm as number).sort((a, b) => a - b)
   const en = val.map((m) => m.energia).filter((e): e is number => typeof e === "number")
   const med = bpms.length ? bpms[Math.floor(bpms.length / 2)] : null
   const e = en.length ? en.reduce((s, x) => s + x, 0) / en.length : null
