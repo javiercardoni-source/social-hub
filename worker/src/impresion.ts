@@ -17,7 +17,7 @@ import { kitDiseno } from "./overlay.ts"
 import { loadKit } from "./render.ts"
 import { renderDiseno } from "./diseno.ts"
 import { normalizarCampos, plantilla } from "../../shared/cos/plantillas.ts"
-import { avisoFoto, conDpi, linkWhatsapp, medidas } from "../../shared/cos/impresion.ts"
+import { avisoFoto, conDpi, leerQr, linkWhatsapp, medidas } from "../../shared/cos/impresion.ts"
 
 const run = promisify(execFile)
 const FF = { timeout: 180_000, maxBuffer: 16 * 1024 * 1024 }
@@ -27,7 +27,7 @@ const renderImpresion: Handler = async (job, { db, log }) => {
   if (!id) throw new PermanentError("payload sin pieza_id")
   const { data: pz } = await db
     .from("cos_print_pieces")
-    .select("id, brand_id, plantilla, campos, version_id, cos_brands(slug, name), cos_print_formats(nombre, ancho_mm, alto_mm, sangrado_mm, dpi)")
+    .select("id, brand_id, plantilla, campos, version_id, qr, cos_brands(slug, name), cos_print_formats(nombre, ancho_mm, alto_mm, sangrado_mm, dpi)")
     .eq("id", id)
     .single()
   if (!pz) throw new PermanentError("la pieza no existe")
@@ -41,8 +41,11 @@ const renderImpresion: Handler = async (job, { db, log }) => {
     const kit = await kitDiseno(marca.slug, custom)
     if (!kit) throw new PermanentError(`la marca ${marca.slug} no tiene kit de diseño`)
     const campos = normalizarCampos(p, (pz.campos ?? {}) as Record<string, unknown>)
-    const wa = campos.linea ? linkWhatsapp(campos.linea) : null
-    const qr = p.id === "imp_pedido" && wa ? await QRCode.toDataURL(wa, { margin: 0, width: 600, errorCorrectionLevel: "M" }) : undefined
+    // El imán lleva su QR al WhatsApp del número; cualquier pieza puede llevar uno elegido (qr.link).
+    const elegido = leerQr(pz.qr)
+    const wa = p.id === "imp_pedido" && campos.linea ? linkWhatsapp(campos.linea) : null
+    const destino = elegido?.link ?? wa
+    const qr = destino ? await QRCode.toDataURL(destino, { margin: 0, width: 600, errorCorrectionLevel: "M" }) : undefined
 
     let aviso: string | null = null
     const jpg = await withTmp(async (dir) => {
@@ -61,7 +64,7 @@ const renderImpresion: Handler = async (job, { db, log }) => {
       }
       if (!fotoUri && p.fotos) throw new PermanentError("la pieza necesita una foto")
       // 1) La pieza a la medida de corte.
-      const png = await renderDiseno({ diseno: { plantilla: p.id, campos, numero: 1 }, marca: marca.slug, fotos: fotoUri ? [fotoUri] : [], kit, width: m.ancho, height: m.alto, qr, nombreMarca: marca.name })
+      const png = await renderDiseno({ diseno: { plantilla: p.id, campos, numero: 1 }, marca: marca.slug, fotos: fotoUri ? [fotoUri] : [], kit, width: m.ancho, height: m.alto, qr, qrEsquina: elegido?.esquina, nombreMarca: marca.name })
       const corte = await writeTmp(dir, "corte.png", png)
       // 2) Sangrado: se agranda el lienzo y el borde se completa en espejo (sin filetes blancos al cortar).
       const s = m.sangrado

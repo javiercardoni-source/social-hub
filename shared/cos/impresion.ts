@@ -118,3 +118,18 @@ export function conDpi(jpg: Uint8Array, dpi: number): Uint8Array {
   out.set(jpg.subarray(2), 2 + app0.length)
   return out
 }
+
+export const ESQUINAS_QR = ["abajo_derecha", "abajo_izquierda", "arriba_derecha", "arriba_izquierda"] as const
+export type EsquinaQr = (typeof ESQUINAS_QR)[number]
+export type QrPieza = { link: string; esquina: EsquinaQr }
+
+/** QR de una pieza: link https válido (o un número, que se pasa a WhatsApp) y esquina conocida. */
+export function leerQr(x: unknown): QrPieza | null {
+  if (!x || typeof x !== "object") return null
+  const o = x as Record<string, unknown>
+  const crudo = typeof o.link === "string" ? o.link.trim() : ""
+  const link = /^https?:\/\/\S+$/i.test(crudo) ? crudo : linkWhatsapp(crudo)
+  if (!link || link.length > 500) return null
+  const esquina = ESQUINAS_QR.includes(o.esquina as EsquinaQr) ? (o.esquina as EsquinaQr) : "abajo_derecha"
+  return { link, esquina }
+}

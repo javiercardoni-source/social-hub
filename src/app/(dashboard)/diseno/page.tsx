@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { signedUrls } from "@/lib/cos/storage"
 import { getActiveBrand } from "@/lib/cos/brand"
 import { PageHeader } from "@/components/dashboard/page-header"
-import { horarioCorto, medidas, nombreArchivo, numeroLocal } from "../../../../shared/cos/impresion"
+import { horarioCorto, linkWhatsapp, medidas, nombreArchivo, numeroLocal } from "../../../../shared/cos/impresion"
 import { plantillasImpresion } from "../../../../shared/cos/plantillas"
 import { normalizarDatos } from "../../../../shared/cos/datos-vigentes"
 import { DisenoGrafico, type FormatoUI, type PiezaUI } from "./diseno-client"
@@ -85,7 +85,12 @@ export default async function DisenoPage() {
           piezas={piezas}
           plantillas={plantillasImpresion(brand.slug, (b?.plantillas ?? []) as string[]).map((p) => ({ id: p.id, nombre: p.nombre, para: p.para, fotos: p.fotos, campos: p.campos }))}
           fotos={usables.map((a) => ({ versionId: a.current_version_id as string, thumb: urls[a.thumb_key as string] ?? null, descripcion: a.description ?? "" }))}
-          sugeridos={{ linea: datos.whatsapp ? numeroLocal(datos.whatsapp) : "", pie: datos.horarios ? horarioCorto(datos.horarios) : "" }}
+          sugeridos={{
+            linea: datos.whatsapp ? numeroLocal(datos.whatsapp) : "",
+            pie: datos.horarios ? horarioCorto(datos.horarios) : "",
+            qrWhatsapp: datos.whatsapp ? linkWhatsapp(datos.whatsapp) : null,
+            qrWeb: /^https?:\/\//.test(datos.web) ? datos.web : null,
+          }}
         />
       </div>
     </>

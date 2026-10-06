@@ -5,7 +5,7 @@ import { aviso } from "@/lib/aviso"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireMember } from "@/lib/cos/auth"
 import { getActiveBrand } from "@/lib/cos/brand"
-import { dpiPara, validarFormato } from "../../../shared/cos/impresion"
+import { dpiPara, leerQr, validarFormato } from "../../../shared/cos/impresion"
 import { normalizarCampos, plantillasImpresion } from "../../../shared/cos/plantillas"
 
 /**
@@ -37,7 +37,7 @@ export async function borrarFormato(id: string) {
   revalidatePath("/diseno")
 }
 
-export async function crearPieza(input: { formatId: string; plantilla: string; campos: Record<string, string>; versionId: string | null }) {
+export async function crearPieza(input: { formatId: string; plantilla: string; campos: Record<string, string>; versionId: string | null; qr?: { link: string; esquina: string } | null }) {
   const member = await requireMember("editor")
   const brand = await getActiveBrand()
   if (!brand) throw aviso("Elegí una marca arriba a la izquierda")
@@ -51,9 +51,11 @@ export async function crearPieza(input: { formatId: string; plantilla: string; c
   const campos = normalizarCampos(p, input.campos)
   const falta = p.campos.find((c) => !c.opcional && !campos[c.clave])
   if (falta) throw aviso(`Falta completar: ${falta.ayuda}`)
+  const qr = input.qr ? leerQr(input.qr) : null
+  if (input.qr && !qr) throw aviso("El QR necesita un link que empiece con https:// o un número de WhatsApp")
   const { data: row, error } = await db
     .from("cos_print_pieces")
-    .insert({ brand_id: brand.id, format_id: input.formatId, plantilla: p.id, campos, version_id: input.versionId, created_by: member.userId })
+    .insert({ brand_id: brand.id, format_id: input.formatId, plantilla: p.id, campos, version_id: input.versionId, qr, created_by: member.userId })
     .select("id")
     .single()
   if (error || !row) throw aviso(`No se pudo guardar: ${error?.message}`)

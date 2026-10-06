@@ -37,3 +37,13 @@ describe("diseño gráfico para imprenta", () => {
     expect(nombreArchivo("Sensaciones de Oriente", { nombre: "Imán 7 × 9 cm", ancho_mm: 70, alto_mm: 90 })).toBe("sensaciones-de-oriente-iman-7-9-cm-7x9cm.jpg")
   })
 })
+
+describe("QR en cualquier pieza", () => {
+  it("acepta un link https o un número (va a WhatsApp) y una esquina conocida", async () => {
+    const { leerQr } = await import("../../shared/cos/impresion")
+    expect(leerQr({ link: "https://www.fasutofudo.com", esquina: "arriba_izquierda" })).toEqual({ link: "https://www.fasutofudo.com", esquina: "arriba_izquierda" })
+    expect(leerQr({ link: "11 2622-2202", esquina: "x" })).toEqual({ link: "https://wa.me/5491126222202", esquina: "abajo_derecha" })
+    expect(leerQr({ link: "javascript:alert(1)" })).toBeNull()
+    expect(leerQr(null)).toBeNull()
+  })
+})

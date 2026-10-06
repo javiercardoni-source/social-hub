@@ -27,7 +27,21 @@ type FotoUI = { versionId: string; thumb: string | null; descripcion: string }
 const cm = (mm: number) => `${(mm / 10).toLocaleString("es-AR")}`
 const input = "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
 
-export function DisenoGrafico(props: { marca: string; formatos: FormatoUI[]; piezas: PiezaUI[]; plantillas: PlantillaUI[]; fotos: FotoUI[]; sugeridos: { linea: string; pie: string } }) {
+const ESQUINAS = [
+  ["abajo_derecha", "Abajo der."],
+  ["abajo_izquierda", "Abajo izq."],
+  ["arriba_derecha", "Arriba der."],
+  ["arriba_izquierda", "Arriba izq."],
+] as const
+
+export function DisenoGrafico(props: {
+  marca: string
+  formatos: FormatoUI[]
+  piezas: PiezaUI[]
+  plantillas: PlantillaUI[]
+  fotos: FotoUI[]
+  sugeridos: { linea: string; pie: string; qrWhatsapp: string | null; qrWeb: string | null }
+}) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [msg, setMsg] = useState<string | null>(null)
@@ -37,6 +51,15 @@ export function DisenoGrafico(props: { marca: string; formatos: FormatoUI[]; pie
   const [campos, setCampos] = useState<Record<string, string>>({ linea: props.sugeridos.linea, pie: props.sugeridos.pie })
   const [nuevo, setNuevo] = useState<{ abierto: boolean; nombre: string; ancho: string; alto: string; sangrado: string }>({ abierto: false, nombre: "", ancho: "", alto: "", sangrado: "3" })
   const pl = props.plantillas.find((p) => p.id === plantillaId)
+  // QR opcional en cualquier plantilla (el imán ya trae el suyo, al WhatsApp del número).
+  const [qr, setQr] = useState<{ on: boolean; destino: "whatsapp" | "web" | "otro"; otro: string; esquina: string }>({
+    on: false,
+    destino: props.sugeridos.qrWhatsapp ? "whatsapp" : props.sugeridos.qrWeb ? "web" : "otro",
+    otro: "",
+    esquina: "abajo_derecha",
+  })
+  const qrLink = qr.destino === "whatsapp" ? props.sugeridos.qrWhatsapp : qr.destino === "web" ? props.sugeridos.qrWeb : qr.otro.trim()
+  const conQr = pl?.id !== "imp_pedido" && qr.on
 
   // Mientras alguna pieza se arma, la pantalla se actualiza sola.
   const armando = props.piezas.some((p) => p.estado === "armando")
@@ -133,7 +156,43 @@ export function DisenoGrafico(props: { marca: string; formatos: FormatoUI[]; pie
               <input className={input} maxLength={c.max} value={campos[c.clave] ?? ""} onChange={(e) => setCampos({ ...campos, [c.clave]: e.target.value })} />
             </label>
           ))}
-          {pl?.id === "imp_pedido" && <p className="text-[11px] text-muted-foreground">El QR abre el chat de WhatsApp de ese número. Sin precios: la pieza dura meses.</p>}
+          {pl?.id === "imp_pedido" ? (
+            <p className="text-[11px] text-muted-foreground">El QR abre el chat de WhatsApp de ese número. Sin precios: la pieza dura meses.</p>
+          ) : (
+            <div className="space-y-2 rounded-xl bg-muted/50 p-3">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                <input type="checkbox" className="h-4 w-4" checked={qr.on} onChange={(e) => setQr({ ...qr, on: e.target.checked })} /> Agregar QR
+              </label>
+              {qr.on && (
+                <>
+                  <div className="flex flex-wrap gap-1.5 text-xs">
+                    {props.sugeridos.qrWhatsapp && (
+                      <button type="button" onClick={() => setQr({ ...qr, destino: "whatsapp" })} className={cn("rounded-full border px-2.5 py-1 font-semibold", qr.destino === "whatsapp" ? "border-primary bg-primary/10 text-primary" : "bg-background")}>
+                        WhatsApp de la marca
+                      </button>
+                    )}
+                    {props.sugeridos.qrWeb && (
+                      <button type="button" onClick={() => setQr({ ...qr, destino: "web" })} className={cn("rounded-full border px-2.5 py-1 font-semibold", qr.destino === "web" ? "border-primary bg-primary/10 text-primary" : "bg-background")}>
+                        Web
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setQr({ ...qr, destino: "otro" })} className={cn("rounded-full border px-2.5 py-1 font-semibold", qr.destino === "otro" ? "border-primary bg-primary/10 text-primary" : "bg-background")}>
+                      Otro link
+                    </button>
+                  </div>
+                  {qr.destino === "otro" && <input className={input} placeholder="https://… (menú, Instagram, reseñas)" value={qr.otro} onChange={(e) => setQr({ ...qr, otro: e.target.value })} />}
+                  {qrLink && <p className="truncate text-[11px] text-muted-foreground">Lleva a: {qrLink}</p>}
+                  <div className="flex flex-wrap gap-1.5 text-xs">
+                    {ESQUINAS.map(([id, label]) => (
+                      <button key={id} type="button" onClick={() => setQr({ ...qr, esquina: id })} className={cn("rounded-full border px-2.5 py-1 font-semibold", qr.esquina === id ? "border-primary bg-primary/10 text-primary" : "bg-background")}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </Card>
 
         {/* Foto */}
@@ -153,8 +212,13 @@ export function DisenoGrafico(props: { marca: string; formatos: FormatoUI[]; pie
           )}
           <Button
             className="w-full"
-            disabled={pending || !formatoId || !pl || (!!pl.fotos && !foto)}
-            onClick={() => run(() => crearPieza({ formatId: formatoId, plantilla: plantillaId, campos, versionId: foto }), "Armando la pieza: aparece a la derecha en unos segundos")}
+            disabled={pending || !formatoId || !pl || (!!pl.fotos && !foto) || (conQr && !qrLink)}
+            onClick={() =>
+              run(
+                () => crearPieza({ formatId: formatoId, plantilla: plantillaId, campos, versionId: foto, qr: conQr && qrLink ? { link: qrLink, esquina: qr.esquina } : null }),
+                "Armando la pieza: aparece a la derecha en unos segundos",
+              )
+            }
           >
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />} Armar pieza para imprenta
           </Button>

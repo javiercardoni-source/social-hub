@@ -40,6 +40,8 @@ export async function renderDiseno(opts: {
   height: number
   /** QR (data URI de un PNG) para las piezas de imprenta. */
   qr?: string
+  /** En las plantillas que no traen QR propio: en qué esquina va (si hay qr). */
+  qrEsquina?: "abajo_derecha" | "abajo_izquierda" | "arriba_derecha" | "arriba_izquierda"
   /** Nombre de la marca para las piezas que lo escriben (imprenta). */
   nombreMarca?: string
 }): Promise<Buffer> {
@@ -243,6 +245,33 @@ export async function renderDiseno(opts: {
     }
     default:
       throw new Error(`plantilla sin dibujo: ${p.id}`)
+  }
+
+  // QR en una esquina para cualquier plantilla (el imán trae el suyo dentro del diseño).
+  if (opts.qr && p.id !== "imp_pedido") {
+    const corto = Math.min(W, H)
+    const lado = corto * 0.2
+    const margen = corto * 0.06
+    const e = opts.qrEsquina ?? "abajo_derecha"
+    hijos.push(
+      abs(
+        {
+          [e.startsWith("abajo") ? "bottom" : "top"]: margen,
+          [e.endsWith("derecha") ? "right" : "left"]: margen,
+          width: lado,
+          flexDirection: "column",
+          alignItems: "center",
+          backgroundColor: "#ffffff",
+          padding: lado * 0.07,
+          borderRadius: lado * 0.06,
+          boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
+        },
+        [
+          { type: "img", props: { src: opts.qr, style: { width: lado * 0.86, height: lado * 0.86 } } } as El,
+          el({ fontFamily: X, fontSize: lado * 0.085, color: "#111111", marginTop: lado * 0.04, letterSpacing: "0.04em" }, "ESCANEÁ Y PEDÍ"),
+        ],
+      ),
+    )
   }
 
   const fuentes = [kit.titulo, kit.texto, ...(kit.acento ? [kit.acento] : [])].map((f) => ({ name: f.name, data: f.data, weight: (f.weight ?? 400) as 400, style: "normal" as const }))
