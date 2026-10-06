@@ -211,7 +211,7 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
   // 1b) Palabra por corte (karaoke) y marcos inclinados: cada clip se compone sobre el color de la
   //     marca, achicado e inclinado ±3° (alternando), con su palabra grande al centro.
   if (g.inclinado || g.palabras?.length) {
-    const fondo = /^#[0-9a-f]{6}$/i.test(kit.etiqueta.bg) ? kit.etiqueta.bg : "#111111"
+    const fondo = kit.fondo
     for (const [i, t] of g.tomas.entries()) {
       const src = join(dir, `n${i}.mp4`)
       const out = join(dir, `k${i}.mp4`)

@@ -16,6 +16,7 @@ import { Resvg } from "@resvg/resvg-js"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { conAlfa, type Paleta } from "../../shared/cos/paleta.ts"
 
 export type Template = "none" | "banda" | "etiqueta" | "firma"
 
@@ -28,6 +29,8 @@ export type CustomKit = {
   title?: { name: string; data: Buffer }
   text?: { name: string; data: Buffer }
   logo?: { data: Buffer; aspect: number }
+  /** Paleta de la marca (cos_brands.paleta): reemplaza a los colores del KIT. */
+  paleta?: Paleta
 }
 export type Layout = "top" | "bottom"
 
@@ -145,6 +148,12 @@ async function signature(kit: Kit, size: number, logoSrc?: string): Promise<El |
   )
 }
 
+/** Los colores del KIT que pisa la paleta de la marca. */
+function colores(p?: Paleta): Partial<Kit> {
+  if (!p) return {}
+  return { text: p.titulo, band: conAlfa(p.fondo, 0.9), label: { bg: p.acento, text: p.acentoTexto } }
+}
+
 /** Capa PNG transparente de width×height. null si la plantilla no dibuja nada. */
 export async function renderOverlay(opts: {
   brand: string
@@ -164,6 +173,7 @@ export async function renderOverlay(opts: {
     ...(c?.title ? { font: { name: c.title.name, file: "", weight: 400 as const } } : {}),
     ...(c?.text ? { small: { name: c.text.name, file: "", weight: 400 as const } } : {}),
     ...(c?.logo ? { logo: { file: "", round: false, aspect: c.logo.aspect }, wordmark: undefined } : {}),
+    ...colores(c?.paleta),
   }
   const logoSrc = c?.logo ? `data:image/png;base64,${c.logo.data.toString("base64")}` : undefined
   const { width: W, height: H } = opts
@@ -229,14 +239,17 @@ export async function renderOverlay(opts: {
  * colores, logo y si va sin firma. Sale de KITS + lo cargado en Marca → Motores.
  */
 export async function kitDeMarca(brand: string, custom?: CustomKit) {
-  const k = KITS[brand]
-  if (!k) return null
+  const b = KITS[brand]
+  if (!b) return null
+  const k: Kit = { ...b, ...colores(custom?.paleta) }
   return {
     titulo: { name: custom?.title?.name ?? k.font.name, data: custom?.title?.data ?? (await font(k.font.file)), weight: custom?.title ? 400 : k.font.weight },
     texto: { name: custom?.text?.name ?? k.small.name, data: custom?.text?.data ?? (await font(k.small.file)), weight: custom?.text ? 400 : k.small.weight },
     mayusculas: k.uppercase,
     colorTexto: k.text,
     etiqueta: k.label,
+    // Fondo pleno de la marca (reels con marcos inclinados). Sin paleta: el del cartel, como antes.
+    fondo: custom?.paleta?.fondo ?? (/^#[0-9a-f]{6}$/i.test(k.label.bg) ? k.label.bg : "#111111"),
     logo: custom?.logo
       ? { src: `data:image/png;base64,${custom.logo.data.toString("base64")}`, aspect: custom.logo.aspect }
       : k.logo

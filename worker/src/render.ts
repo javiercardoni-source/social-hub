@@ -11,6 +11,7 @@ import { PermanentError } from "./queue.ts"
 import { storageFor, supabaseStorage } from "./storage.ts"
 import { compositePhoto, finishVideo, fitForInstagramFeed, fitForStory, photoToReel, probe, toJpeg, withTmp, writeTmp } from "./media.ts"
 import { KITS, layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
+import { leerPaleta } from "../../shared/cos/paleta.ts"
 import { reviewPiece, type PieceReview } from "./ai.ts"
 
 // Subir este número vuelve a generar todas las piezas (si cambia el diseño de las plantillas).
@@ -197,10 +198,14 @@ export async function loadKit(db: SupabaseClient, brandId: string): Promise<Cust
     .eq("brand_id", brandId)
     .in("kind", ["fuente_titulo", "fuente_texto", "logo"])
     .order("kind")
+  const { data: marca } = await db.from("cos_brands").select("paleta").eq("id", brandId).maybeSingle()
+  const paleta = leerPaleta(marca?.paleta)
   let kit: CustomKit | undefined
-  if (data?.length) {
-    kit = { version: data.map((a) => a.id).join(".") }
-    for (const a of data) {
+  if (data?.length || paleta) {
+    // La paleta entra en la versión: si cambia, las piezas se rearman.
+    kit = { version: [...(data ?? []).map((a) => a.id), ...(paleta ? [Object.values(paleta).join("")] : [])].join(".") }
+    if (paleta) kit.paleta = paleta
+    for (const a of data ?? []) {
       if (!fileCache.has(a.storage_key)) fileCache.set(a.storage_key, await supabaseStorage(db).download(a.storage_key))
       const buf = fileCache.get(a.storage_key)!
       // Nombre de familia propio: no choca con las tipografías del kit.
