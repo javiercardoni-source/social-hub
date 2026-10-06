@@ -93,16 +93,28 @@ export function nombreArchivo(marca: string, f: Pick<FormatoImpresion, "nombre" 
 
 /**
  * Marca 300 dpi (o los que sean) en la cabecera JFIF del JPG, para que la imprenta lo abra con la
- * medida real (si no, lo ve a 72 dpi y "gigante"). Si el JPG no trae JFIF lo deja igual.
+ * medida real (si no, lo ve a 72 dpi y "gigante"). ffmpeg no escribe JFIF: en ese caso se agrega
+ * el segmento entero justo después del inicio del archivo.
  */
 export function conDpi(jpg: Uint8Array, dpi: number): Uint8Array {
-  const esJfif = jpg[0] === 0xff && jpg[1] === 0xd8 && jpg[2] === 0xff && jpg[3] === 0xe0 && String.fromCharCode(jpg[6], jpg[7], jpg[8], jpg[9]) === "JFIF"
-  if (!esJfif) return jpg
-  const out = new Uint8Array(jpg)
-  out[13] = 1 // unidades: puntos por pulgada
-  out[14] = (dpi >> 8) & 0xff
-  out[15] = dpi & 0xff
-  out[16] = (dpi >> 8) & 0xff
-  out[17] = dpi & 0xff
+  if (jpg[0] !== 0xff || jpg[1] !== 0xd8) return jpg
+  const hi = (dpi >> 8) & 0xff
+  const lo = dpi & 0xff
+  const esJfif = jpg[2] === 0xff && jpg[3] === 0xe0 && String.fromCharCode(jpg[6], jpg[7], jpg[8], jpg[9]) === "JFIF"
+  if (esJfif) {
+    const out = new Uint8Array(jpg)
+    out[13] = 1 // unidades: puntos por pulgada
+    out[14] = hi
+    out[15] = lo
+    out[16] = hi
+    out[17] = lo
+    return out
+  }
+  // APP0 JFIF 1.01: largo 16, "JFIF\0", versión, unidades, densidad X/Y, sin miniatura.
+  const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, hi, lo, hi, lo, 0x00, 0x00]
+  const out = new Uint8Array(jpg.length + app0.length)
+  out.set(jpg.subarray(0, 2), 0)
+  out.set(app0, 2)
+  out.set(jpg.subarray(2), 2 + app0.length)
   return out
 }

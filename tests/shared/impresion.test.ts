@@ -29,6 +29,11 @@ describe("diseño gráfico para imprenta", () => {
     const jfif = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0])
     const out = conDpi(jfif, 300)
     expect([out[13], (out[14] << 8) | out[15], (out[16] << 8) | out[17]]).toEqual([1, 300, 300])
+    // JPG de ffmpeg (sin JFIF, con comentario): se le agrega la cabecera con los dpi.
+    const ff = new Uint8Array([0xff, 0xd8, 0xff, 0xfe, 0, 4, 0x4c, 0x61, 0xff, 0xdb])
+    const o2 = conDpi(ff, 300)
+    expect([o2[2], o2[3], String.fromCharCode(...o2.slice(6, 10)), o2[13], (o2[14] << 8) | o2[15]]).toEqual([0xff, 0xe0, "JFIF", 1, 300])
+    expect([...o2.slice(20)]).toEqual([...ff.slice(2)])
     expect(nombreArchivo("Sensaciones de Oriente", { nombre: "Imán 7 × 9 cm", ancho_mm: 70, alto_mm: 90 })).toBe("sensaciones-de-oriente-iman-7-9-cm-7x9cm.jpg")
   })
 })

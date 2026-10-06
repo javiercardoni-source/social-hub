@@ -57,7 +57,14 @@ export async function crearPieza(input: { formatId: string; plantilla: string; c
     .select("id")
     .single()
   if (error || !row) throw aviso(`No se pudo guardar: ${error?.message}`)
-  const { error: je } = await db.rpc("cos_enqueue_job", { p_type: "impresion:render", p_payload: { pieza_id: row.id }, p_dedupe_key: `impresion:${row.id}` })
+  // Va adelante en la cola (la cola sale por run_at): una pieza de imprenta tarda segundos y Javier
+  // la está esperando en pantalla; no tiene sentido que espere detrás de una tanda de reels.
+  const { error: je } = await db.rpc("cos_enqueue_job", {
+    p_type: "impresion:render",
+    p_payload: { pieza_id: row.id },
+    p_run_at: new Date(Date.now() - 24 * 3600_000).toISOString(),
+    p_dedupe_key: `impresion:${row.id}`,
+  })
   if (je) throw aviso(`No se pudo pedir la pieza: ${je.message}`)
   revalidatePath("/diseno")
 }
