@@ -941,7 +941,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
   const { data, error } = await db
     .from("cos_posts")
     .select(
-      `id, status, platform, post_type, caption, overlay_text, template, music_key, brand_id,
+      `id, status, platform, post_type, caption, overlay_text, template, music_key, brand_id, diseno,
        cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(id, description, ai_json)))`,
     )
     .in("id", ids as string[])
@@ -956,6 +956,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     template: Template
     music_key: string | null
     brand_id: string
+    diseno: { plantilla?: string } | null
     cos_post_media: { position: number; cos_asset_versions: { cos_assets: { id: string; description: string | null; ai_json: { summary?: string } | null } | null } | null }[]
   }[]
   if (!posts.length) return
@@ -1019,6 +1020,11 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
         render_qa: null,
       })
       await queue.enqueue("post:render", { post_id: p.id })
+      // La tapa dibujada lleva el gancho: con gancho nuevo se redibuja (misma plantilla, textos nuevos).
+      if (p.post_type === "reel" && p.diseno?.plantilla) {
+        await setPost(db, p.id, { tapa_key: null })
+        await queue.enqueue("post:disenar", { post_id: p.id, plantilla: p.diseno.plantilla }, { runAt: new Date(Date.now() + 5_000) })
+      }
     }
     await db.from("cos_audit_log").insert({
       event: "post:redone",
