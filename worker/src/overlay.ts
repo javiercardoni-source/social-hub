@@ -28,6 +28,8 @@ export type CustomKit = {
   version: string
   title?: { name: string; data: Buffer }
   text?: { name: string; data: Buffer }
+  /** Manuscrita (solo la usan las plantillas propias: diseno.ts). */
+  acento?: { name: string; data: Buffer }
   logo?: { data: Buffer; aspect: number }
   /** Paleta de la marca (cos_brands.paleta): reemplaza a los colores del KIT. */
   paleta?: Paleta
@@ -259,3 +261,16 @@ export async function kitDeMarca(brand: string, custom?: CustomKit) {
   }
 }
 export type KitMarca = NonNullable<Awaited<ReturnType<typeof kitDeMarca>>>
+
+/** Lo que necesitan las plantillas propias (diseno.ts): tipografías y paleta de la marca. */
+export async function kitDiseno(brand: string, custom?: CustomKit) {
+  const k = await kitDeMarca(brand, custom)
+  if (!k) return null
+  const hex = (x: string, otro: string) => (/^#[0-9a-f]{6}$/i.test(x) ? x : otro)
+  return {
+    titulo: k.titulo,
+    texto: k.texto,
+    acento: custom?.acento,
+    paleta: custom?.paleta ?? { fondo: hex(k.fondo, "#111111"), titulo: hex(k.colorTexto, "#ffffff"), acento: hex(k.etiqueta.bg, "#ffffff"), acentoTexto: hex(k.etiqueta.text, "#111111") },
+  }
+}

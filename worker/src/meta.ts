@@ -112,6 +112,8 @@ export async function publishInstagram(opts: {
   signal: AbortSignal
   /** Reels: milisegundo del video que se usa como tapa en el perfil (thumb_offset). */
   thumbOffsetMs?: number
+  /** Reels: imagen de tapa (plantilla de la marca). Si está, reemplaza a thumb_offset. */
+  coverUrl?: string
 }): Promise<{ remoteId: string; permalink: string | null }> {
   const { igUserId, token, type, caption, media, signal } = opts
   if (media.length === 0) throw new PermanentError("el post no tiene archivos")
@@ -146,7 +148,14 @@ export async function publishInstagram(opts: {
       })).id
     } else {
       const params = mediaParams(media[0], type)
-      const tapa = params.media_type === "REELS" && opts.thumbOffsetMs != null ? { thumb_offset: String(Math.round(opts.thumbOffsetMs)) } : {}
+      const tapa =
+        params.media_type !== "REELS"
+          ? {}
+          : opts.coverUrl
+            ? { cover_url: opts.coverUrl }
+            : opts.thumbOffsetMs != null
+              ? { thumb_offset: String(Math.round(opts.thumbOffsetMs)) }
+              : {}
       containerId = (await graph<{ id: string }>("POST", `${igUserId}/media`, token, {
         ...params,
         ...tapa,

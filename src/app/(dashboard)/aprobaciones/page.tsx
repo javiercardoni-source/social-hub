@@ -5,6 +5,7 @@ import { getActiveBrand } from "@/lib/cos/brand"
 import { suggestionsFor } from "@/lib/cos/analytics"
 import { liftText } from "../../../../shared/cos/timing"
 import { lineaDeTiempo, type GuionReel } from "../../../../shared/cos/reel"
+import { leerDiseno, plantilla, plantillasDe, textoDiseno } from "../../../../shared/cos/plantillas"
 import { PageHeader } from "@/components/dashboard/page-header"
 import { ListaAprobaciones, Preparando, type Grupo } from "./aprobaciones-client"
 
@@ -22,6 +23,8 @@ type RawPost = {
   created_at: string
   overlay_text: string
   template: string
+  diseno: unknown
+  tapa_key: string | null
   render_key: string | null
   music_key: string | null
   overlay_position: "auto" | "top" | "bottom"
@@ -34,7 +37,7 @@ type RawPost = {
   schedule_reason: string | null
   schedule_lock: boolean
   pick_json: { porque?: string; elegido?: string; final?: string; override?: unknown } | null
-  cos_brands: { name: string; color: string; slug: string } | null
+  cos_brands: { name: string; color: string; slug: string; plantillas: string[] | null } | null
   cos_social_accounts: { display_name: string } | null
   cos_post_media: {
     position: number
@@ -58,6 +61,22 @@ type RawPost = {
 // Orden en que se muestran los formatos dentro de una misma subida.
 const ORDER = ["instagram:feed", "instagram:reel", "instagram:carousel", "instagram:story", "facebook:feed", "facebook:reel"]
 
+/**
+ * Plantilla propia de la pieza y las que se pueden elegir. Fotos (post e historia) y la tapa de
+ * los reels de Instagram; la historia-video de un reel no lleva.
+ */
+function disenoDe(p: RawPost, esVideo: boolean) {
+  const slug = p.cos_brands?.slug ?? ""
+  const d = leerDiseno(p.diseno, slug)
+  const reelIg = !!p.montaje && p.post_type === "reel" && p.platform === "instagram"
+  const fotoIg = !p.montaje && !esVideo && p.platform === "instagram" && (p.post_type === "feed" || p.post_type === "story")
+  const opciones = reelIg || fotoIg ? plantillasDe(slug, p.post_type === "story" ? "story" : "feed", p.cos_brands?.plantillas ?? []) : []
+  return {
+    diseno: d ? { plantilla: d.plantilla, nombre: plantilla(d.plantilla)?.nombre ?? d.plantilla, texto: textoDiseno(d) } : null,
+    plantillas: opciones.map((x) => ({ id: x.id, nombre: x.nombre, para: x.para })),
+  }
+}
+
 /** ¿Pasaron más de `min` minutos desde `iso`? (fuera del componente: la hora actual no es "pura") */
 function haceMasDe(iso: string, min: number) {
   return Date.now() - new Date(iso).getTime() > min * 60_000
@@ -71,8 +90,8 @@ export default async function AprobacionesPage() {
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock, pick_json,
-      cos_brands(name, color, slug),
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, diseno, tapa_key, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock, pick_json,
+      cos_brands(name, color, slug, plantillas),
       cos_social_accounts(display_name),
       cos_post_media(
         position,
@@ -94,6 +113,7 @@ export default async function AprobacionesPage() {
   const keys = [
     ...posts.flatMap((p) => p.cos_post_media.map((m) => m.cos_asset_versions?.storage_key).filter(Boolean) as string[]),
     ...(posts.map((p) => p.render_key).filter(Boolean) as string[]),
+    ...(posts.map((p) => p.tapa_key).filter(Boolean) as string[]),
   ]
   const urls = await signedUrls(keys, 3 * 3600)
 
@@ -136,7 +156,7 @@ export default async function AprobacionesPage() {
     if (!grupos.has(key)) {
       grupos.set(key, {
         key,
-        brand: p.cos_brands,
+        brand: p.cos_brands ? { name: p.cos_brands.name, color: p.cos_brands.color } : null,
         mediaUrl: v?.storage_key ? (urls[v.storage_key] ?? null) : null,
         isVideo: !!v?.mime?.startsWith("video/"),
         width: v?.width ?? null,
@@ -170,6 +190,8 @@ export default async function AprobacionesPage() {
         confianza: x.confianza,
       })),
       template: p.template,
+      ...disenoDe(p, !!v?.mime?.startsWith("video/")),
+      tapaUrl: p.tapa_key ? (urls[p.tapa_key] ?? null) : null,
       // Por qué este tema (F7 M2), mientras siga siendo el que eligió el motor.
       musicaPorque: p.pick_json?.porque && !p.pick_json.override && [p.pick_json.final, p.pick_json.elegido].includes(p.music_key ?? "") ? p.pick_json.porque : null,
       // Horario que eligió la agenda (F8): se aprueba con su ventana.

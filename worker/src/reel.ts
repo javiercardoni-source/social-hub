@@ -320,10 +320,13 @@ export type ReelPost = {
 }
 
 /** Carga un post con guion y TODAS sus fuentes en orden. null = el post no es un reel con guion. */
-export async function loadReelPost(db: SupabaseClient, postId: string): Promise<(ReelPost & { status: string; render_key: string | null }) | null> {
+export async function loadReelPost(
+  db: SupabaseClient,
+  postId: string,
+): Promise<(ReelPost & { status: string; render_key: string | null; post_type: string; platform: string; diseno: unknown; tapa_key: string | null }) | null> {
   const { data, error } = await db
     .from("cos_posts")
-    .select("id, status, brand_id, overlay_text, music_key, montaje, render_key, cos_brands(slug), cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime))")
+    .select("id, status, brand_id, post_type, platform, overlay_text, music_key, montaje, render_key, diseno, tapa_key, cos_brands(slug), cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime))")
     .eq("id", postId)
     .single()
   if (error || !data) throw new Error(`post ${postId}: ${error?.message ?? "no existe"}`)
@@ -335,6 +338,10 @@ export async function loadReelPost(db: SupabaseClient, postId: string): Promise<
     music_key: string | null
     montaje: GuionReel | null
     render_key: string | null
+    post_type: string
+    platform: string
+    diseno: unknown
+    tapa_key: string | null
     cos_brands: { slug: string } | null
     cos_post_media: { position: number; cos_asset_versions: VersionReel | null }[]
   }

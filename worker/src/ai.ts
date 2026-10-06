@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, rasgosPrompt, reelPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
 import { RECUADROS } from "../../shared/cos/reel.ts"
 import { RASGOS, costoUsd } from "../../shared/cos/gustos.ts"
+import { CLAVES_CAMPO, type Plantilla } from "../../shared/cos/plantillas.ts"
 import { PermanentError } from "./queue.ts"
 
 /**
@@ -728,4 +729,79 @@ export async function recomendarMusica(opts: {
   await logUsage(opts.db, { purpose: "musica:recomendar", model: opts.model, usage: response.usage })
   if (!response.parsed_output) throw new Error(`la IA no devolvió la recomendación (stop: ${response.stop_reason})`)
   return response.parsed_output
+}
+
+// ── Plantillas propias por marca (06-10-2026) ────────────────────────────────
+
+const CamposIA = z.object(
+  Object.fromEntries(CLAVES_CAMPO.map((k) => [k, z.string().describe("Vacío si la plantilla elegida no lo usa")])) as Record<(typeof CLAVES_CAMPO)[number], z.ZodString>,
+)
+export const DisenoIA = z.object({
+  plantilla: z.string().describe("id EXACTO de una de las plantillas ofrecidas"),
+  campos: CamposIA,
+  razon: z.string().describe("Por qué esta plantilla para esta foto, en una línea"),
+})
+export type DisenoIA = z.infer<typeof DisenoIA>
+
+/**
+ * Elige la plantilla propia de la marca para una foto y escribe sus textos. `forzar` = la que
+ * eligió Javier en Aprobaciones (la IA solo escribe los textos). Mira la foto: una foto fuerte
+ * puede ir con Firma; un producto puntual, con Sticker o Galería.
+ */
+export async function disenarPieza(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  assetId: string
+  foto: Buffer
+  opciones: Plantilla[]
+  forzar?: Plantilla | null
+  descripcion: string
+  resumen: string
+  /** Frase que ya usa el reel de esta foto: el post tiene que decir otra cosa. */
+  evitar?: string
+  pedido?: string
+}): Promise<DisenoIA> {
+  const opciones = opts.forzar ? [opts.forzar] : opts.opciones
+  if (!opciones.length) throw new PermanentError("la marca no tiene plantillas para este formato")
+  const catalogo = opciones
+    .map((p) => `- ${p.id} («${p.nombre}»): ${p.para}\n  campos: ${p.campos.length ? p.campos.map((c) => `${c.clave} (máx ${c.max} letras${c.opcional ? ", opcional" : ""}: ${c.ayuda})`).join("; ") : "ninguno"}`)
+    .join("\n")
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2000,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: opts.foto.toString("base64") } },
+          {
+            type: "text",
+            text: [
+              "Sos director de arte de la marca. Con ESTA foto se arma una pieza con una plantilla propia de la marca.",
+              opts.forzar ? `La plantilla ya está elegida: ${opts.forzar.id}. Solo escribí sus textos.` : "Elegí la plantilla que mejor le queda a la foto y escribí sus textos.",
+              "Plantillas:",
+              catalogo,
+              `Foto: ${opts.descripcion || "(sin descripción)"} · ${opts.resumen}`,
+              opts.evitar ? `El reel de esta misma foto ya dice "${opts.evitar}": esta pieza tiene que decir OTRA cosa.` : "",
+              opts.pedido ? `Pedido de quien aprueba: ${opts.pedido}` : "",
+              "Reglas: textos cortos y con la voz de la marca; respetá el máximo de letras de cada campo. NUNCA precios ni montos.",
+              "Nunca 'sin TACC', 'sin gluten' ni 'apto celíacos'. Solo nombres de productos que existan en los datos de la marca o se vean en la foto.",
+              "Sin emojis ni hashtags. Los campos que la plantilla no usa van vacíos.",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(DisenoIA) },
+  })
+  await logUsage(opts.db, { purpose: "post:diseno", model: opts.model, usage: response.usage, assetId: opts.assetId })
+  const r = response.parsed_output
+  if (!r) throw new Error(`la IA no devolvió un diseño válido (stop: ${response.stop_reason})`)
+  // Una plantilla que no estaba en la lista: la primera ofrecida (nunca una de otra marca).
+  if (!opciones.some((p) => p.id === r.plantilla)) r.plantilla = opciones[0].id
+  return r
 }

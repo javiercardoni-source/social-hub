@@ -1,6 +1,7 @@
 "use server"
 
 import { MOTIVOS_DE_MATERIAL, validarRechazo } from "../../../shared/cos/rechazos"
+import { plantilla } from "../../../shared/cos/plantillas"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
 import { horaHistoriaManual, primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
@@ -388,6 +389,35 @@ export async function rehacerConIA(postIds: string[], pedido: string, otroDiseno
       otra_musica: otraMusica,
       by: member.email ?? member.userId,
     },
+  })
+  if (je) throw aviso(`No se pudo pedir: ${je.message}`)
+}
+
+// ── plantillas propias por marca (06-10-2026) ───────────────────────────────
+
+/**
+ * Cambia la plantilla de una pieza (o la tapa de un reel). `plantillaId` = una de la marca, o
+ * "clasica" para volver al texto encima de la foto. La IA reescribe los textos para esa plantilla.
+ */
+export async function cambiarPlantilla(postId: string, plantillaId: string) {
+  const member = await requireMember("editor")
+  const db = createAdminClient()
+  const { data: p, error } = await db.from("cos_posts").select("id, status, post_type, montaje, cos_brands(slug, plantillas)").eq("id", postId).single()
+  if (error || !p) throw aviso("No encuentro esa publicación")
+  if (p.status !== "PENDING_APPROVAL") throw aviso("Esta publicación ya no espera aprobación")
+  const marca = p.cos_brands as unknown as { slug: string; plantillas: string[] | null } | null
+  if (plantillaId !== "clasica") {
+    const pl = plantilla(plantillaId)
+    if (!pl || pl.marca !== marca?.slug || !(marca.plantillas ?? []).includes(pl.id)) throw aviso("Esa plantilla no es de esta marca")
+    if (pl.formato !== (p.post_type === "story" ? "story" : "feed")) throw aviso("Esa plantilla no es para este formato")
+  }
+  // Mientras se rearma, la pieza vieja no se muestra (no se aprueba algo que ya no es).
+  const limpiar = p.montaje ? { tapa_key: null } : { render_key: null, render_qa: null }
+  const { error: ue } = await db.from("cos_posts").update(limpiar).eq("id", postId)
+  if (ue) throw aviso(`No se pudo cambiar: ${ue.message}`)
+  const { error: je } = await db.rpc("cos_enqueue_job", {
+    p_type: "post:disenar",
+    p_payload: { post_id: postId, plantilla: plantillaId, by: member.email ?? member.userId },
   })
   if (je) throw aviso(`No se pudo pedir: ${je.message}`)
 }

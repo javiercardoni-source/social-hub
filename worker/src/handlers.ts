@@ -23,10 +23,11 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
 import { compactVideo, decodeAudio, framesAt, grillaImagen, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { analyzeGrid, analyzeReference, classify, recomendarMusica, writeCaption, writeHolidayPhrase } from "./ai.ts"
+import { analyzeGrid, analyzeReference, classify, disenarPieza, recomendarMusica, writeCaption, writeHolidayPhrase } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
-import { ensureRender, exists, loadRenderPost, renderReviewed } from "./render.ts"
+import { ensureRender, ensureTapa, exists, loadRenderPost, renderReviewed } from "./render.ts"
+import { leerDiseno, normalizarCampos, plantilla, plantillasDe, textoDiseno, type Diseno, type FormatoDiseno } from "../../shared/cos/plantillas.ts"
 import { syncAccount } from "./metrics.ts"
 import { arDay, climaParaHoy, contextForBrand, syncContext } from "./context.ts"
 import { datosParaIA, normalizarDatos } from "../../shared/cos/datos-vigentes.ts"
@@ -532,6 +533,10 @@ async function borradoresReel(
   // Facebook: el mismo video (sale por /videos porque la pieza es un mp4).
   if (o.cuentas.fb) formats.push({ account: o.cuentas.fb, platform: "facebook", post_type: "feed", caption, hashtags })
 
+  // Plantillas propias (06-10): de una foto sola sale además un post de foto (otro día) y la tapa.
+  if (o.versiones.length === 1 && o.versiones[0].mime?.startsWith("image/") && o.origen.startsWith("asset:")) {
+    await queue.enqueue("post:foto", { asset_id: o.assetId }, { dedupeKey: `foto:${o.assetId}`, runAt: new Date(Date.now() + 60_000) })
+  }
   const created: string[] = []
   for (const f of formats) {
     const story = f.post_type === "story"
@@ -831,7 +836,9 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
             saveContainer: (id) => setPost(db, p.id, { remote_container_id: id }),
             signal,
             // Tapa del reel en el perfil: el cuadro donde el gancho ya se lee entero.
-            thumbOffsetMs: reel && p.post_type === "reel" ? TAPA_MS : undefined,
+            thumbOffsetMs: reel && p.post_type === "reel" && !reel.tapa_key ? TAPA_MS : undefined,
+            // Tapa dibujada con la plantilla de la marca: se ve en la grilla del perfil.
+            coverUrl: reel && p.post_type === "reel" && reel.tapa_key && (await exists(db, reel.tapa_key)) ? await supabaseStorage(db).signedUrl(reel.tapa_key, 3600) : undefined,
           })
         : p.platform === "facebook"
           ? await publishFacebook({ pageId: account.external_id, token, type: p.post_type, caption, media: prepared.items })
@@ -884,7 +891,10 @@ const renderPost: Handler = async (job, { db, log }) => {
       const key = await ensureReel(db, reel)
       const now = await loadReelPost(db, postId)
       if (!now || now.overlay_text !== reel.overlay_text || now.music_key !== reel.music_key || JSON.stringify(now.montaje) !== JSON.stringify(reel.montaje)) continue
-      await setPost(db, postId, { render_key: key, render_qa: { skipped: "reel" } })
+      // Tapa del reel dibujada con una plantilla de la marca (si tiene diseño de tapa).
+      const tapaDiseno = reel.post_type === "reel" && reel.platform === "instagram" ? leerDiseno(reel.diseno, reel.brand_slug) : null
+      const tapa = tapaDiseno ? await ensureTapa(db, { id: reel.id, brand_id: reel.brand_id, brand_slug: reel.brand_slug, diseno: tapaDiseno, version: reel.versiones[0] }) : null
+      await setPost(db, postId, { render_key: key, render_qa: { skipped: "reel" }, tapa_key: tapa })
       await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
       log("reel listo", { post: postId, key })
       return
@@ -892,7 +902,7 @@ const renderPost: Handler = async (job, { db, log }) => {
     const p = await loadRenderPost(db, postId)
     if (["PUBLISHED", "PUBLISHING", "CANCELLED", "REJECTED"].includes(p.status)) return
     // Ya resuelta y revisada (o aprobada): solo se asegura que exista, sin volver a decidir.
-    if (p.overlay_layout && p.render_qa) {
+    if ((p.overlay_layout || p.diseno) && p.render_qa) {
       const key = await ensureRender(db, p)
       if (key !== p.render_key) await setPost(db, postId, { render_key: key })
       await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
@@ -901,7 +911,8 @@ const renderPost: Handler = async (job, { db, log }) => {
     const r = await renderReviewed(db, p, s.ai_model)
     const now = await loadRenderPost(db, postId)
     const changed =
-      now.template !== p.template || now.overlay_text !== p.overlay_text || now.music_key !== p.music_key || now.overlay_position !== p.overlay_position
+      now.template !== p.template || now.overlay_text !== p.overlay_text || now.music_key !== p.music_key || now.overlay_position !== p.overlay_position ||
+      JSON.stringify(now.diseno ?? null) !== JSON.stringify(p.diseno ?? null)
     if (changed) continue
     await setPost(db, postId, { render_key: r.key, overlay_layout: r.layout, render_qa: r.qa })
     // La primera vez que queda lista, el borrador pasa a verse en Aprobaciones (nunca se borra).
@@ -1857,6 +1868,237 @@ const checkAccounts: Handler = async (_job, { db, log }) => {
   }
 }
 
+
+// ── plantillas propias por marca (06-10-2026) ───────────────────────────────
+
+/** Baja la versión del archivo y la deja en JPEG (para la IA y para dibujar). */
+async function fotoDeVersion(db: SupabaseClient, v: VersionRow): Promise<Buffer> {
+  const b = v.storage_driver === "supabase" && v.storage_key ? await supabaseStorage(db).download(v.storage_key) : await storageFor("drive", db).download(v.drive_file_id ?? v.storage_key ?? "")
+  return withTmp(async (dir) => toJpeg(await writeTmp(dir, "in", b), dir))
+}
+
+/** Otras 3 fotos de la marca para la grilla (las más nuevas que se pueden usar, sin la del post). */
+async function fotosParaGrilla(db: SupabaseClient, brandId: string, sinVersion: string): Promise<string[]> {
+  const { data } = await db
+    .from("cos_assets")
+    .select("current_version_id, source, review_status, consent")
+    .eq("brand_id", brandId)
+    .eq("media_type", "photo")
+    .not("current_version_id", "is", null)
+    .neq("consent", "blocked")
+    .order("created_at", { ascending: false })
+    .limit(40)
+  return (data ?? [])
+    .filter((a) => (["manual", "turnos"].includes(a.source) || a.review_status === "approved") && a.current_version_id !== sinVersion)
+    .map((a) => a.current_version_id as string)
+    .slice(0, 3)
+}
+
+/** Número de la cartela de museo (Bijutsukan): cuántas piezas con plantilla lleva la marca + 1. */
+async function numeroDePieza(db: SupabaseClient, brandId: string): Promise<number> {
+  const { count } = await db.from("cos_posts").select("id", { count: "exact", head: true }).eq("brand_id", brandId).not("diseno", "is", null)
+  return (count ?? 0) + 1
+}
+
+/** La IA elige plantilla (o usa la forzada) y escribe los textos; queda listo para guardar. */
+async function disenar(
+  db: SupabaseClient,
+  o: {
+    brandId: string
+    slug: string
+    habilitadas: string[]
+    formato: FormatoDiseno
+    assetId: string
+    versionId: string
+    foto: Buffer
+    descripcion: string
+    resumen: string
+    evitar?: string
+    forzar?: string
+    pedido?: string
+  },
+): Promise<Diseno & { razon: string }> {
+  const s = await settings(db)
+  const opciones = plantillasDe(o.slug, o.formato, o.habilitadas)
+  const forzada = o.forzar ? plantilla(o.forzar) : null
+  if (forzada && (forzada.marca !== o.slug || forzada.formato !== o.formato)) throw new PermanentError(`la plantilla ${o.forzar} no es de ${o.slug} para ${o.formato}`)
+  const r = await disenarPieza({
+    db,
+    model: s.ai_model,
+    brand: await brandContext(db, o.brandId),
+    assetId: o.assetId,
+    foto: o.foto,
+    opciones,
+    forzar: forzada,
+    descripcion: o.descripcion,
+    resumen: o.resumen,
+    evitar: o.evitar,
+    pedido: o.pedido,
+  })
+  const p = plantilla(r.plantilla)!
+  const d: Diseno = { plantilla: p.id, campos: normalizarCampos(p, r.campos, o.evitar ?? "") }
+  if (p.fotos === 4) d.fotos = await fotosParaGrilla(db, o.brandId, o.versionId)
+  if (p.id.startsWith("bj_galeria")) d.numero = await numeroDePieza(db, o.brandId)
+  return { ...d, razon: r.razon }
+}
+
+/**
+ * post:foto — de una foto que ya salió como reel, arma con las plantillas propias de la marca:
+ *   · un post de foto de Instagram (la agenda lo pone otro día: 1 post por día),
+ *   · la historia (si la marca tiene plantilla de historia; reemplaza a la historia-video del reel),
+ *   · la tapa del reel en el perfil.
+ */
+const fotoPost: Handler = async (job, { db, queue, log }) => {
+  const assetId = idFrom(job, "asset_id")
+  const a = (await must(db.from("cos_assets").select(`${ASSET_COLS}, consent, ai_json`).eq("id", assetId).single(), "asset")) as AssetRow & {
+    consent: string
+    ai_json: { summary?: string } | null
+  }
+  if (a.media_type !== "photo" || a.consent === "blocked" || !a.current_version_id) return
+  const { data: b } = await db.from("cos_brands").select("slug, plantillas").eq("id", a.brand_id).single()
+  const slug = b?.slug ?? ""
+  const habilitadas = (b?.plantillas ?? []) as string[]
+  if (!habilitadas.length) return
+  // Idempotencia: si ya hay piezas vivas con plantilla de esta foto, no se arman otras.
+  const { data: ya } = await db
+    .from("cos_post_media")
+    .select("cos_posts!inner(id, status, diseno, montaje)")
+    .eq("version_id", a.current_version_id)
+    .not("cos_posts.status", "in", "(CANCELLED,REJECTED)")
+  const vivos = (ya ?? []).map((x) => x.cos_posts as unknown as { id: string; status: string; diseno: unknown; montaje: unknown })
+  if (vivos.some((p) => p.diseno && !p.montaje)) return
+
+  const { data: accounts } = await db.from("cos_social_accounts").select("id, platform").eq("brand_id", a.brand_id).eq("platform", "instagram").neq("status", "disabled")
+  const ig = accounts?.[0]
+  if (!ig) return
+  const { data: v } = await db.from("cos_asset_versions").select("id, storage_driver, storage_key, drive_file_id, mime").eq("id", a.current_version_id).single()
+  if (!v) throw new PermanentError("el asset no tiene versión")
+  const foto = await fotoDeVersion(db, v as VersionRow)
+
+  // Los hermanos de la misma foto (reel, su historia y Facebook): el post dice otra cosa que el reel.
+  const { data: hermanos } = await db
+    .from("cos_posts")
+    .select("id, post_type, platform, status, overlay_text, diseno")
+    .eq("brand_id", a.brand_id)
+    .contains("montaje", { origen: `asset:${a.id}` })
+    .not("status", "in", "(CANCELLED,REJECTED)")
+  const gancho = hermanos?.find((h) => h.post_type === "reel")?.overlay_text ?? ""
+  const base = { brandId: a.brand_id, slug, habilitadas, assetId: a.id, versionId: v.id, foto, descripcion: a.description ?? "", resumen: a.ai_json?.summary ?? "" }
+  const s = await settings(db)
+  const creados: string[] = []
+
+  const nuevo = async (formato: FormatoDiseno, d: Diseno, caption: string, hashtags: string) => {
+    const post = (await must(
+      db
+        .from("cos_posts")
+        .insert({
+          brand_id: a.brand_id,
+          account_id: ig.id,
+          platform: "instagram",
+          post_type: formato,
+          caption,
+          hashtags,
+          overlay_text: textoDiseno(d).slice(0, 60),
+          template: "none",
+          diseno: d,
+          status: "DRAFT",
+        })
+        .select("id")
+        .single(),
+      "post",
+    )) as { id: string }
+    await must(db.from("cos_post_media").insert({ post_id: post.id, version_id: v.id, position: 0 }).select("post_id").single(), "archivo del post")
+    await setPost(db, post.id, { status: "PENDING_APPROVAL" })
+    await queue.enqueue("post:render", { post_id: post.id }, { dedupeKey: `render:${post.id}` })
+    creados.push(`${formato}:${d.plantilla}`)
+  }
+
+  if (plantillasDe(slug, "feed", habilitadas).length) {
+    const { razon, ...d } = await disenar(db, { ...base, formato: "feed", evitar: gancho })
+    const c = await writeCaption({
+      db,
+      model: s.ai_model,
+      brand: await brandContext(db, a.brand_id),
+      assetId: a.id,
+      platform: "instagram",
+      postType: "feed",
+      description: [a.description ?? "", `Post de foto con la plantilla «${plantilla(d.plantilla)?.nombre}»: ${textoDiseno(d)}`].filter(Boolean).join(" · "),
+      aiSummary: a.ai_json?.summary ?? "",
+      request: gancho ? `El reel de esta misma foto sale otro día con la frase "${gancho}": este texto tiene que ser distinto.` : undefined,
+      context: await contextForBrand(db, a.brand_id).catch(() => ""),
+    })
+    await nuevo("feed", d, `${c.hook.trim()}\n${c.caption.trim()}`, c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" "))
+    log("post de foto con plantilla", { asset: a.id, plantilla: d.plantilla, razon })
+  }
+
+  if (plantillasDe(slug, "story", habilitadas).length) {
+    const { razon, ...d } = await disenar(db, { ...base, formato: "story", evitar: gancho })
+    await nuevo("story", d, "", "")
+    // La historia con plantilla reemplaza a la historia-video del reel (no dos historias de la misma foto).
+    for (const h of hermanos ?? []) if (h.post_type === "story" && h.status === "PENDING_APPROVAL") await setPost(db, h.id, { status: "CANCELLED" })
+    log("historia con plantilla", { asset: a.id, plantilla: d.plantilla, razon })
+  }
+
+  // Tapa del reel: otra plantilla de feed, con el gancho del reel como texto principal.
+  const reelIg = hermanos?.find((h) => h.post_type === "reel" && h.platform === "instagram" && h.status === "PENDING_APPROVAL" && !h.diseno)
+  if (reelIg && plantillasDe(slug, "feed", habilitadas).length) {
+    const { razon, ...d } = await disenar(db, { ...base, formato: "feed", pedido: `Es la TAPA del reel (lo que se ve en la grilla del perfil). Usá la frase del reel "${gancho}" como texto principal.` })
+    await setPost(db, reelIg.id, { diseno: d })
+    await queue.enqueue("post:render", { post_id: reelIg.id }, { dedupeKey: `render:${reelIg.id}` })
+    creados.push(`tapa:${d.plantilla}`)
+    log("tapa del reel con plantilla", { post: reelIg.id, plantilla: d.plantilla, razon })
+  }
+
+  await db.from("cos_audit_log").insert({ event: "post:drafted", entity_type: "asset", entity_id: a.id, actor: "worker", details_json: { formats: creados, plantillas: true } })
+  await pedirAgenda(db, queue, a.brand_id)
+}
+
+/**
+ * post:disenar — Javier cambia la plantilla de una pieza en Aprobaciones. `plantilla` = id, o
+ * "clasica" para volver a la plantilla de siempre (texto encima de la foto). En un reel cambia la tapa.
+ */
+const disenarPost: Handler = async (job, { db, queue, log }) => {
+  const postId = idFrom(job, "post_id")
+  const elegida = typeof job.payload.plantilla === "string" ? job.payload.plantilla : ""
+  const pedido = typeof job.payload.pedido === "string" ? job.payload.pedido.slice(0, 300) : ""
+  const { data: p } = await db
+    .from("cos_posts")
+    .select(
+      "id, status, brand_id, post_type, overlay_text, montaje, cos_brands(slug, plantillas), cos_post_media(position, cos_asset_versions(id, asset_id, storage_driver, storage_key, drive_file_id, mime, cos_assets!cos_asset_versions_asset_id_fkey(description, ai_json)))",
+    )
+    .eq("id", postId)
+    .single()
+  if (!p) throw new PermanentError("el post no existe")
+  if (p.status !== "PENDING_APPROVAL") return
+  const marca = p.cos_brands as unknown as { slug: string; plantillas: string[] | null }
+  type Media = VersionRow & { asset_id: string; cos_assets: { description: string | null; ai_json: { summary?: string } | null } | null }
+  const media = (p.cos_post_media as unknown as { position: number; cos_asset_versions: Media | null }[]).sort((x, y) => x.position - y.position)[0]?.cos_asset_versions
+  if (!media) throw new PermanentError("el post no tiene archivo")
+  const reel = !!p.montaje
+  if (elegida === "clasica") {
+    await setPost(db, postId, reel ? { diseno: null, tapa_key: null } : { diseno: null, template: defaultTemplate(marca.slug), render_key: null, render_qa: null, overlay_layout: null })
+  } else {
+    if (reel && p.post_type !== "reel") throw new PermanentError("la historia de un reel es el video: no lleva plantilla")
+    const formato: FormatoDiseno = p.post_type === "story" ? "story" : "feed"
+    const { razon, ...d } = await disenar(db, {
+      brandId: p.brand_id,
+      slug: marca.slug,
+      habilitadas: marca.plantillas ?? [],
+      formato,
+      assetId: media.asset_id,
+      versionId: media.id,
+      foto: await fotoDeVersion(db, media),
+      descripcion: media.cos_assets?.description ?? "",
+      resumen: media.cos_assets?.ai_json?.summary ?? "",
+      forzar: elegida || undefined,
+      pedido: [reel ? `Es la TAPA del reel. Usá la frase del reel "${p.overlay_text}" como texto principal.` : "", pedido].filter(Boolean).join(" "),
+    })
+    await setPost(db, postId, reel ? { diseno: d } : { diseno: d, template: "none", overlay_text: textoDiseno(d).slice(0, 60), render_key: null, render_qa: null, overlay_layout: null })
+    log("plantilla cambiada", { post: postId, plantilla: d.plantilla, razon })
+  }
+  await queue.enqueue("post:render", { post_id: postId }, { dedupeKey: `render:${postId}` })
+}
+
 export const handlers: Record<string, Handler> = {
   // Trabajo de prueba: sirve para verificar punta a punta que la cola anda en producción.
   "system:ping": async (job, ctx) => {
@@ -1871,6 +2113,8 @@ export const handlers: Record<string, Handler> = {
   "post:render": renderPost,
   "post:delete": deletePost,
   "post:redo": redoPosts,
+  "post:foto": fotoPost,
+  "post:disenar": disenarPost,
   "metrics:sync": syncMetrics,
   "context:sync": syncContextJob,
   "archive:import-ig": importInstagram,

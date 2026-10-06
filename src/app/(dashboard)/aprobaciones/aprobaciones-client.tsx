@@ -4,7 +4,7 @@ import { explicarError } from "@/lib/ui-errors"
 
 import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { aprobarPost, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
+import { aprobarPost, cambiarPlantilla, editarPost, rechazarPost, rehacerConIA } from "@/lib/cos/actions"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
@@ -36,6 +36,12 @@ export type PostItem = {
   reel: { idea: string; segundos: number; tomas: { porQue: string; segundos: number; fuente: number }[]; fuentes: number; respaldo: boolean; precio: string | null } | null
   renderUrl: string | null
   accountName: string
+  /** Plantilla propia de la marca con que se dibujó (en un reel: su tapa). null = la clásica. */
+  diseno: { plantilla: string; nombre: string; texto: string } | null
+  /** Plantillas de la marca que se pueden elegir para esta pieza (vacío = no lleva). */
+  plantillas: { id: string; nombre: string; para: string }[]
+  /** Tapa del reel en el perfil, dibujada con la plantilla. */
+  tapaUrl: string | null
 }
 
 const TEMPLATES = [
@@ -280,6 +286,17 @@ function GrupoCard({ g }: { g: Grupo }) {
     })
   }
 
+  // Plantilla propia: la IA reescribe los textos para esa plantilla y el worker rearma la pieza.
+  function elegirPlantilla(id: string) {
+    run(async () => {
+      await cambiarPlantilla(p.id, id)
+      for (const ms of [6000, 8000, 10000, 15000]) {
+        await new Promise((r) => setTimeout(r, ms))
+        router.refresh()
+      }
+    })
+  }
+
   function run(fn: () => Promise<void>) {
     setError(null)
     start(async () => {
@@ -309,6 +326,30 @@ function GrupoCard({ g }: { g: Grupo }) {
     const next = g.posts.find((x) => !ids.includes(x.id) && !resuelto[x.id])
     if (next) setActive(next.id)
   }
+
+
+  const chipsPlantilla = (actual: string | null, clasica: string) => (
+    <div className="flex flex-wrap gap-1.5">
+      {[...p.plantillas.map((x) => ({ id: x.id, label: x.nombre, hint: x.para })), { id: "clasica", label: clasica, hint: "sin plantilla propia" }].map((x) => (
+        <button
+          key={x.id}
+          type="button"
+          title={x.hint}
+          disabled={!!resuelto[p.id] || pending}
+          onClick={() => elegirPlantilla(x.id)}
+          className={cn("rounded-full border px-3 py-1 text-xs font-semibold", (actual ?? "clasica") === x.id ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted")}
+        >
+          {x.label}
+        </button>
+      ))}
+      {actual && (
+        <button type="button" disabled={!!resuelto[p.id] || pending} onClick={() => elegirPlantilla(actual)} className="rounded-full border border-dashed px-3 py-1 text-xs font-semibold hover:bg-muted" title="La IA escribe otros textos con la misma plantilla">
+          <Sparkles className="mr-1 inline h-3 w-3" />
+          Otros textos
+        </button>
+      )}
+    </div>
+  )
 
   if (pendientes.length === 0) {
     const n = Object.values(resuelto).filter((v) => v === "aprobado").length
@@ -402,7 +443,28 @@ function GrupoCard({ g }: { g: Grupo }) {
                 aria-label="Gancho del reel: el texto de la tapa"
                 className="w-full rounded-xl border bg-background px-3 py-2 text-sm font-semibold uppercase outline-none focus:ring-2 focus:ring-primary/40"
               />
-              <p className="text-xs text-muted-foreground">El gancho va sobre la primera toma y es la tapa del reel en el perfil.</p>
+              <p className="text-xs text-muted-foreground">
+                {p.plantillas.length ? "El gancho va sobre la primera toma." : "El gancho va sobre la primera toma y es la tapa del reel en el perfil."}
+              </p>
+              {p.plantillas.length > 0 && (
+                <div className="space-y-2 rounded-xl border px-3 py-2.5">
+                  <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Tapa en el perfil</label>
+                  <div className="flex gap-3">
+                    {p.tapaUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.tapaUrl} alt="Tapa del reel" className="h-36 w-auto shrink-0 rounded-lg border object-cover" />
+                    ) : p.diseno ? (
+                      <div className="grid h-36 w-20 shrink-0 place-items-center rounded-lg border bg-muted text-center text-[11px] text-muted-foreground">Armando…</div>
+                    ) : null}
+                    <div className="min-w-0 space-y-1.5">
+                      <p className="text-xs text-muted-foreground">
+                        {p.diseno ? <>Plantilla <b className="text-foreground">{p.diseno.nombre}</b>{p.diseno.texto ? ` · ${p.diseno.texto}` : ""}</> : "Sin tapa dibujada: se usa un cuadro del video."}
+                      </p>
+                      {chipsPlantilla(p.diseno?.plantilla ?? null, "Cuadro del video")}
+                    </div>
+                  </div>
+                </div>
+              )}
               {p.reel.respaldo && (
                 <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">
                   ⚠ La IA no pudo armar el guion: se armó uno automático. Probá «Rehacer con IA».
@@ -425,8 +487,22 @@ function GrupoCard({ g }: { g: Grupo }) {
             </div>
           )}
 
+          {/* Plantilla propia de la marca (arma la pieza entera) */}
+          {!p.reel && p.plantillas.length > 0 && (
+            <div className="space-y-2">
+              <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Plantilla de la marca</label>
+              {chipsPlantilla(p.diseno?.plantilla ?? null, "Clásica")}
+              {p.diseno && (
+                <p className="text-xs text-muted-foreground">
+                  {p.diseno.texto ? <>Textos: <b className="text-foreground">{p.diseno.texto}</b></> : "Sin textos: solo la foto y la marca."}
+                  {!p.renderUrl && " · Rearmando la pieza…"}
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Texto sobre la imagen y plantilla de marca */}
-          {!p.reel && <div className="space-y-2">
+          {!p.reel && !p.diseno && <div className="space-y-2">
             <label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Sobre la imagen</label>
             <div className="flex flex-wrap gap-1.5">
               {TEMPLATES.map((tp) => (

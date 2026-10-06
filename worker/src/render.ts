@@ -10,7 +10,9 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError } from "./queue.ts"
 import { storageFor, supabaseStorage } from "./storage.ts"
 import { compositePhoto, finishVideo, fitForInstagramFeed, fitForStory, photoToReel, probe, toJpeg, withTmp, writeTmp } from "./media.ts"
-import { KITS, layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
+import { KITS, kitDiseno, layoutCandidates, renderOverlay, type CustomKit, type Layout, type Template } from "./overlay.ts"
+import { renderDiseno } from "./diseno.ts"
+import { leerDiseno, plantilla, textoDiseno, type Diseno } from "../../shared/cos/plantillas.ts"
 import { leerPaleta } from "../../shared/cos/paleta.ts"
 import { reviewPiece, type PieceReview } from "./ai.ts"
 
@@ -31,6 +33,8 @@ export type RenderPost = {
   brand_slug: string
   /** Tipografías y logo que cargó Javier en Marca → Motores (si hay). */
   kit?: CustomKit
+  /** Plantilla propia de la marca (arma la pieza entera). null = plantilla vieja encima de la foto. */
+  diseno?: Diseno | null
   version: { id: string; storage_driver: string; storage_key: string | null; drive_file_id: string | null; mime: string | null }
 }
 
@@ -41,6 +45,8 @@ export type RenderPost = {
  */
 export function rendersVideo(p: RenderPost): boolean {
   const isVideo = !!p.version.mime?.startsWith("video/")
+  // Pieza dibujada con plantilla propia: es una imagen (la historia con música, un video quieto).
+  if (p.diseno && !isVideo && p.post_type !== "reel") return p.post_type === "story" && !!p.music_key
   return isVideo || p.post_type === "reel" || (!!p.music_key && (p.post_type === "story" || p.platform === "facebook"))
 }
 
@@ -50,7 +56,7 @@ export function renderKey(p: RenderPost): string | null {
   if (isVideo && p.template === "none" && !p.music_key) return null
   const h = createHash("sha256")
     // El diseño de la plantilla de la marca (KITS) entra en la clave: si cambia, se rearma solo.
-    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom", p.kit?.version ?? "", JSON.stringify(KITS[p.brand_slug] ?? null)].join("\x1f"))
+    .update([RENDER_VERSION, p.version.id, p.platform, p.post_type, p.template, p.overlay_text, p.music_key ?? "", p.brand_slug, p.overlay_layout ?? "bottom", p.kit?.version ?? "", JSON.stringify(KITS[p.brand_slug] ?? null), JSON.stringify(p.diseno ?? null)].join("\x1f"))
     .digest("hex")
     .slice(0, 16)
   return `renders/${p.id}/${h}.${rendersVideo(p) ? "mp4" : "jpg"}`
@@ -83,6 +89,10 @@ export async function ensureRender(db: SupabaseClient, p: RenderPost): Promise<s
 
   const data = await withTmp(async (dir) => {
     const f = await writeTmp(dir, isVideo ? "in.mp4" : "in", original)
+    if (p.diseno && !isVideo) {
+      const pieza = await piezaDisenada(db, p, p.diseno, await toJpeg(f, dir), story, dir)
+      return rendersVideo(p) ? photoToReel({ photo9x16: pieza, layer: null, music, seconds: PHOTO_REEL_SECONDS, dir }) : pieza
+    }
     if (isVideo) {
       const info = await probe(f, v.mime)
       const layer = await renderOverlay({ brand: p.brand_slug, template: p.template, text: p.overlay_text, width: info.width, height: info.height, story: story || reel, layout: p.overlay_layout ?? "bottom", custom: p.kit })
@@ -100,6 +110,60 @@ export async function ensureRender(db: SupabaseClient, p: RenderPost): Promise<s
   })
 
   await supabaseStorage(db).upload(key, data, rendersVideo(p) ? "video/mp4" : "image/jpeg")
+  return key
+}
+
+/**
+ * Dibuja la pieza con la plantilla propia de la marca. `foto` es la del post (JPEG); la grilla
+ * suma otras fotos de la marca (diseno.fotos = versiones). Devuelve JPEG del tamaño final.
+ */
+export async function piezaDisenada(db: SupabaseClient, p: Pick<RenderPost, "brand_slug" | "kit">, d: Diseno, foto: Buffer, story: boolean, dir: string): Promise<Buffer> {
+  const kit = await kitDiseno(p.brand_slug, p.kit)
+  if (!kit) throw new PermanentError(`la marca ${p.brand_slug} no tiene kit de diseño`)
+  const uri = (b: Buffer) => `data:image/jpeg;base64,${b.toString("base64")}`
+  const fotos = [uri(foto)]
+  if (plantilla(d.plantilla)?.fotos === 4 && d.fotos?.length) {
+    const { data: vs } = await db.from("cos_asset_versions").select("id, storage_driver, storage_key, drive_file_id, mime").in("id", d.fotos)
+    for (const [i, v] of (vs ?? []).entries()) {
+      try {
+        const b = v.storage_driver === "supabase" && v.storage_key ? await supabaseStorage(db).download(v.storage_key) : await storageFor("drive", db).download(v.drive_file_id ?? v.storage_key ?? "")
+        fotos.push(uri(await toJpeg(await writeTmp(dir, `extra${i}`, b), dir)))
+      } catch {
+        // Una foto extra que no baja no frena la pieza: la grilla repite la del post.
+      }
+    }
+  }
+  const png = await renderDiseno({ diseno: d, marca: p.brand_slug, fotos, kit, width: 1080, height: story ? 1920 : 1350 })
+  return toJpeg(await writeTmp(dir, "diseno.png", png), dir)
+}
+
+/**
+ * Tapa del reel en el perfil (cover_url), dibujada con una plantilla de feed de la marca. La pieza
+ * es 4:5 y va centrada en 9:16 sobre el fondo de la marca: en la grilla del perfil se ve entera.
+ */
+export async function ensureTapa(db: SupabaseClient, p: { id: string; brand_id: string; brand_slug: string; diseno: Diseno; version: RenderPost["version"] }): Promise<string> {
+  const kit = await loadKit(db, p.brand_id)
+  const h = createHash("sha256").update([RENDER_VERSION, p.version.id, JSON.stringify(p.diseno), kit?.version ?? ""].join("\x1f")).digest("hex").slice(0, 16)
+  const key = `renders/${p.id}/tapa-${h}.jpg`
+  if (await exists(db, key)) return key
+  const v = p.version
+  const original = v.storage_driver === "supabase" && v.storage_key ? await supabaseStorage(db).download(v.storage_key) : await storageFor("drive", db).download(v.drive_file_id ?? v.storage_key ?? "")
+  const fondo = (await kitDiseno(p.brand_slug, kit))?.paleta.fondo ?? "#111111"
+  const data = await withTmp(async (dir) => {
+    const f = await writeTmp(dir, "in", original)
+    const { execFile } = await import("node:child_process")
+    const { promisify } = await import("node:util")
+    const { readFile } = await import("node:fs/promises")
+    // De un video, el cuadro del segundo 1.
+    const foto = v.mime?.startsWith("video/")
+      ? (await promisify(execFile)("ffmpeg", ["-y", "-ss", "1", "-i", f, "-frames:v", "1", "-q:v", "2", `${dir}/cuadro.jpg`], { timeout: 60_000 }), await readFile(`${dir}/cuadro.jpg`))
+      : await toJpeg(f, dir)
+    const pieza = await piezaDisenada(db, { brand_slug: p.brand_slug, kit }, p.diseno, foto, false, dir)
+    const src = await writeTmp(dir, "tapa-4x5.jpg", pieza)
+    await promisify(execFile)("ffmpeg", ["-y", "-i", src, "-vf", `scale=1080:1350,pad=1080:1920:0:285:color=0x${fondo.slice(1)}`, "-q:v", "2", `${dir}/tapa.jpg`], { timeout: 60_000 })
+    return readFile(`${dir}/tapa.jpg`)
+  })
+  await supabaseStorage(db).upload(key, data, "image/jpeg")
   return key
 }
 
@@ -127,6 +191,13 @@ export type Resolved = { key: string | null; layout: Layout | null; qa: (PieceRe
  * que no tapa nada. Si ninguna pasa, devuelve la mejor puntuada con la advertencia a la vista.
  */
 export async function renderReviewed(db: SupabaseClient, p: RenderPost, model: string): Promise<Resolved> {
+  if (p.diseno) {
+    // Plantilla propia: una sola composición posible; la IA la revisa igual (legibilidad, que no tape).
+    const key = await ensureRender(db, { ...p, overlay_layout: null })
+    if (!key) return { key, layout: null, qa: { skipped: "sin pieza" } }
+    const review = await reviewPiece({ db, model, image: await frameOf(db, key), overlayText: textoDiseno(p.diseno), template: plantilla(p.diseno.plantilla)?.nombre ?? p.diseno.plantilla })
+    return { key, layout: null, qa: { ...review, tried: [] } }
+  }
   if (p.template === "none") {
     return { key: await ensureRender(db, { ...p, overlay_layout: null }), layout: null, qa: { skipped: "sin plantilla" } }
   }
@@ -148,7 +219,7 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
   const { data, error } = await db
     .from("cos_posts")
     .select(
-      `id, status, platform, post_type, overlay_text, template, music_key, overlay_position, overlay_layout, render_key, render_qa, brand_id, cos_brands(slug),
+      `id, status, platform, post_type, overlay_text, template, diseno, music_key, overlay_position, overlay_layout, render_key, render_qa, brand_id, cos_brands(slug),
        cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime))`,
     )
     .eq("id", postId)
@@ -161,6 +232,7 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
     post_type: RenderPost["post_type"]
     overlay_text: string
     template: Template
+    diseno: unknown
     music_key: string | null
     overlay_position: "auto" | Layout
     overlay_layout: Layout | null
@@ -172,7 +244,8 @@ export async function loadRenderPost(db: SupabaseClient, postId: string): Promis
   }
   const version = [...row.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions
   if (!version) throw new PermanentError("el post no tiene archivos")
-  return { ...row, brand_slug: row.cos_brands?.slug ?? "", version, kit: await loadKit(db, row.brand_id) }
+  const brand_slug = row.cos_brands?.slug ?? ""
+  return { ...row, brand_slug, diseno: leerDiseno(row.diseno, brand_slug), version, kit: await loadKit(db, row.brand_id) }
 }
 
 // ── Kit propio de la marca (Marca → Motores) ─────────────────────────────────
@@ -196,7 +269,7 @@ export async function loadKit(db: SupabaseClient, brandId: string): Promise<Cust
     .from("cos_brand_assets")
     .select("id, kind, storage_key")
     .eq("brand_id", brandId)
-    .in("kind", ["fuente_titulo", "fuente_texto", "logo"])
+    .in("kind", ["fuente_titulo", "fuente_texto", "fuente_acento", "logo"])
     .order("kind")
   const { data: marca } = await db.from("cos_brands").select("paleta").eq("id", brandId).maybeSingle()
   const paleta = leerPaleta(marca?.paleta)
@@ -211,6 +284,7 @@ export async function loadKit(db: SupabaseClient, brandId: string): Promise<Cust
       // Nombre de familia propio: no choca con las tipografías del kit.
       if (a.kind === "fuente_titulo") kit.title = { name: `Titulo-${a.id.slice(0, 8)}`, data: buf }
       if (a.kind === "fuente_texto") kit.text = { name: `Texto-${a.id.slice(0, 8)}`, data: buf }
+      if (a.kind === "fuente_acento") kit.acento = { name: `Acento-${a.id.slice(0, 8)}`, data: buf }
       if (a.kind === "logo") kit.logo = { data: buf, aspect: pngAspect(buf) }
     }
   }
