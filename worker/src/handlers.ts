@@ -1591,6 +1591,17 @@ const refLink: Handler = async (job, { db, queue, log }) => {
     if (tipo !== "capcut" || capcut) break
     await new Promise((ok) => setTimeout(ok, 2000))
   }
+  if (capcut && !capcut.videoUrl && capcut.imagenUrl) {
+    // Plantilla de imagen: se guarda el diseño como JPG (va mejor como referencia de Posts).
+    const img = await fetch(capcut.imagenUrl, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(30_000) })
+    if (!img.ok) return falla(`No se pudo bajar la imagen (HTTP ${img.status}). Subila como archivo.`)
+    const jpg = await withTmp(async (dir) => toJpeg(await writeTmp(dir, "img", Buffer.from(await img.arrayBuffer())), dir))
+    const key = r.storage_key.replace(/\.mp4$/, ".jpg")
+    await supabaseStorage(db).upload(key, jpg, "image/jpeg")
+    await db.from("cos_brand_assets").update({ storage_key: key, mime: "image/jpeg", size_bytes: jpg.length, link_meta: { fuente: "capcut", tipo: "imagen" } }).eq("id", id)
+    await analizarRef(db, queue, id, log)
+    return
+  }
   const videoUrl = capcut?.videoUrl ?? leerOgVideo(html)
   if (!videoUrl) {
     return falla(

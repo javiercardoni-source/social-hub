@@ -29,6 +29,10 @@ describe("referencia por link", () => {
     expect(leerCapcut(html, "7364525986605485317")?.videoUrl).toBe("https://v16.capcut.com/mia")
     expect(leerCapcut(html, "7364525986605485317")?.tomas).toEqual([0.5])
   })
+  it("plantilla de imagen: sin video, se toma el diseño completo", () => {
+    const html = `<script>{"cover_url":"https:\\u002F\\u002Fp16.capcut.com\\u002Fdiseno.image","video_url":"","web_id":"7367066114683079941"}</script>`
+    expect(leerCapcut(html, "7367066114683079941")).toEqual({ videoUrl: null, imagenUrl: "https://p16.capcut.com/diseno.image", tomas: [], duracion: null, portada: "https://p16.capcut.com/diseno.image" })
+  })
   it("plan B: og:video", () => {
     expect(leerOgVideo('<meta property="og:video" content="https://x.com/v.mp4?a=1&amp;b=2">')).toBe("https://x.com/v.mp4?a=1&b=2")
   })
