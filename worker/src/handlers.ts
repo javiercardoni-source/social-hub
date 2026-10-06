@@ -54,7 +54,7 @@ import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaB
 import { openDays } from "../../shared/cos/timing.ts"
 import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
 import { TRAITS_VERSION, analizarAudio, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
-import { cortesDesdeTomas, leerCapcut, leerOgVideo, tipoDeLink } from "../../shared/cos/referencia-link.ts"
+import { cortesDesdeTomas, idPlantilla, leerCapcut, leerOgVideo, tipoDeLink } from "../../shared/cos/referencia-link.ts"
 import { alPulso, perfilMusical, ritmoDeReferencias, type MusicaRef } from "../../shared/cos/ritmo.ts"
 import { gustosHandlers } from "./gustos.ts"
 import { agendaHandlers } from "./agenda.ts"
@@ -1572,15 +1572,25 @@ const refLink: Handler = async (job, { db, queue, log }) => {
   }
   const tipo = tipoDeLink(r.source_url)
   const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+  // CapCut a veces responde otra versión de la página: hasta 3 intentos antes de rendirse.
   let html = ""
-  try {
-    const res = await fetch(r.source_url, { headers: { "user-agent": UA, "accept-language": "es-AR,es;q=0.9" }, redirect: "follow", signal: AbortSignal.timeout(20_000) })
-    if (!res.ok) return falla(`La página respondió ${res.status}. Subí el video como archivo.`)
-    html = await res.text()
-  } catch (e) {
-    return falla(`No se pudo abrir el link (${String(e).slice(0, 80)}). Subí el video como archivo.`)
+  let capcut: ReturnType<typeof leerCapcut> = null
+  for (let intento = 0; intento < 3; intento++) {
+    try {
+      const res = await fetch(r.source_url, { headers: { "user-agent": UA, "accept-language": "es-AR,es;q=0.9,en;q=0.8", accept: "text/html" }, redirect: "follow", signal: AbortSignal.timeout(20_000) })
+      if (!res.ok) {
+        if (intento === 2) return falla(`La página respondió ${res.status}. Subí el video como archivo.`)
+        continue
+      }
+      html = await res.text()
+    } catch (e) {
+      if (intento === 2) return falla(`No se pudo abrir el link (${String(e).slice(0, 80)}). Subí el video como archivo.`)
+      continue
+    }
+    capcut = tipo === "capcut" ? leerCapcut(html, idPlantilla(r.source_url)) : null
+    if (tipo !== "capcut" || capcut) break
+    await new Promise((ok) => setTimeout(ok, 2000))
   }
-  const capcut = tipo === "capcut" ? leerCapcut(html) : null
   const videoUrl = capcut?.videoUrl ?? leerOgVideo(html)
   if (!videoUrl) {
     return falla(

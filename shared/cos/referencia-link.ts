@@ -39,8 +39,28 @@ function stringJson(html: string, clave: string): string | null {
 
 export type PlantillaCapcut = { videoUrl: string; tomas: number[]; duracion: number | null; portada: string | null }
 
+/** El número de la plantilla en un link de CapCut (/templates/<id>). */
+export function idPlantilla(url: string): string | null {
+  return /\/templates\/(\d{8,25})/.exec(url)?.[1] ?? null
+}
+
+/**
+ * La página trae también plantillas RELACIONADAS (cada una con su video). Con el id, se recorta el
+ * objeto de ESTA plantilla: desde el último video_url antes de su "web_id" hasta su segment_config.
+ */
+function bloqueDe(html: string, id: string): string | null {
+  const ancla = html.indexOf(`"web_id":"${id}"`)
+  if (ancla < 0) return null
+  const ini = html.lastIndexOf('"video_url":"', ancla)
+  if (ini < 0 || ancla - ini > 60_000) return null
+  const seg = html.indexOf('"segment_config":"', ancla)
+  const fin = seg >= 0 && seg - ancla < 60_000 ? html.indexOf('"}', html.indexOf('target_timerange_list', seg)) + 2 : ancla + 2000
+  return html.slice(ini, Math.max(fin, ancla + 100))
+}
+
 /** null si la página no trae el video (CapCut cambió la página o pide la app). */
-export function leerCapcut(html: string): PlantillaCapcut | null {
+export function leerCapcut(htmlCompleto: string, id?: string | null): PlantillaCapcut | null {
+  const html = (id && bloqueDe(htmlCompleto, id)) || htmlCompleto
   const videoUrl = stringJson(html, "video_url")
   if (!videoUrl || !/^https:\/\//.test(videoUrl)) return null
   let tomas: number[] = []
@@ -58,7 +78,7 @@ export function leerCapcut(html: string): PlantillaCapcut | null {
     }
   }
   const total = tomas.reduce((s, d) => s + d, 0)
-  return { videoUrl, tomas, duracion: total > 0 ? Math.round(total * 100) / 100 : null, portada: stringJson(html, "cover_url") }
+  return { videoUrl, tomas, duracion: total > 0 ? Math.round(total * 100) / 100 : null, portada: stringJson(html, "cover_url") ?? stringJson(htmlCompleto, "cover_url") }
 }
 
 export function leerOgVideo(html: string): string | null {

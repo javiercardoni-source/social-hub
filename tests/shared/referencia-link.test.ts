@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cortesDesdeTomas, leerCapcut, leerOgVideo, tipoDeLink } from "../../shared/cos/referencia-link"
+import { cortesDesdeTomas, idPlantilla, leerCapcut, leerOgVideo, tipoDeLink } from "../../shared/cos/referencia-link"
 import { ajustarAlPulso, alPulso, perfilMusical, ritmoDeReferencias } from "../../shared/cos/ritmo"
 
 // Pedazo con la misma forma que la página pública de una plantilla (JSON embebido, / y segment_config en texto).
@@ -20,6 +20,14 @@ describe("referencia por link", () => {
     expect(p.duracion).toBe(2.25)
     expect(cortesDesdeTomas(p.tomas)).toEqual([0.674, 1.462])
     expect(leerCapcut("<html></html>")).toBeNull()
+  })
+  it("con varias plantillas en la página, toma la del link (no una relacionada)", () => {
+    const rel = `{"video_url":"https:\\u002F\\u002Fotra.capcut.com\\u002Frelacionada","web_id":"111"}`
+    const mia = `{"video_url":"https:\\u002F\\u002Fv16.capcut.com\\u002Fmia","web_id":"7364525986605485317","extra_v2":{"segment_config":"{\\"target_timerange_list\\":[{\\"start\\":0,\\"duration\\":500000}]}"}}`
+    const html = `<script>${rel}${mia}</script>`
+    expect(idPlantilla("https://www.capcut.com/templates/7364525986605485317?scene=category")).toBe("7364525986605485317")
+    expect(leerCapcut(html, "7364525986605485317")?.videoUrl).toBe("https://v16.capcut.com/mia")
+    expect(leerCapcut(html, "7364525986605485317")?.tomas).toEqual([0.5])
   })
   it("plan B: og:video", () => {
     expect(leerOgVideo('<meta property="og:video" content="https://x.com/v.mp4?a=1&amp;b=2">')).toBe("https://x.com/v.mp4?a=1&b=2")
