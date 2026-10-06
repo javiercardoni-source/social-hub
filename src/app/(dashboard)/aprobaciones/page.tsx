@@ -142,10 +142,19 @@ export default async function AprobacionesPage() {
   // Una subida se muestra recién cuando todas sus piezas finales estuvieron listas alguna vez
   // (así no aparece "a medio editar"). Si algo se traba más de 10 min, se muestra igual.
   const preparando = new Set<string>()
-  const trabado = (p: (typeof posts)[number]) => haceMasDe(p.created_at, 10)
+  // Mientras su armado esté en la cola, no está trabado: solo espera turno (con la cola larga puede
+  // tardar horas). Sin nada en la cola y más de 10 min, sí: se muestra para no perderlo de vista.
+  const { data: enCola } = await db.from("cos_jobs").select("payload").in("type", ["post:render", "post:disenar", "post:redo"]).in("status", ["queued", "running"])
+  const esperando = new Set(
+    (enCola ?? []).flatMap((j) => {
+      const pl = j.payload as { post_id?: string; post_ids?: string[] }
+      return [...(pl.post_id ? [pl.post_id] : []), ...(pl.post_ids ?? [])]
+    }),
+  )
+  const trabado = (p: (typeof posts)[number]) => !esperando.has(p.id) && haceMasDe(p.created_at, 10)
   for (const p of posts) {
     const k = [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions?.cos_assets?.id ?? p.id
-    if (!p.first_render_at && !trabado(p)) preparando.add(k)
+    if ((!p.first_render_at || !p.render_key) && !trabado(p)) preparando.add(k)
   }
 
   const grupos = new Map<string, Grupo>()
