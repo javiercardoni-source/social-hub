@@ -11,7 +11,7 @@ import { BookOpen, CheckCircle, Circle, CircleDot, ClipboardList, Loader2, Send,
 import { cn } from "@/lib/utils"
 import type { DatosVigentes } from "../../../../shared/cos/datos-vigentes"
 import { DatosVigentesForm } from "./datos-vigentes"
-import { Motores, type Insumo, type Tema } from "./motores"
+import { Motores, type Insumo, type MusicaRecomendadaUI, type Tema } from "./motores"
 import { AgendaMarcaPanel, type AgendaMarca } from "./agenda-marca"
 
 export type ModuloEstado = {
@@ -33,10 +33,11 @@ type Props = {
   datosAt: string | null
   insumos: Insumo[]
   musica: Tema[]
+  musicaRecomendada: MusicaRecomendadaUI | null
   agenda: AgendaMarca
 }
 
-export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt, insumos, musica, agenda }: Props) {
+export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt, insumos, musica, musicaRecomendada, agenda }: Props) {
   const router = useRouter()
   const firstOpen = modulos.find((m) => m.status === "in_progress") ?? modulos.find((m) => m.status === "pending") ?? modulos[0]
   const [activo, setActivo] = useState<string>(firstOpen.id)
@@ -201,7 +202,7 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
       {vista === "agenda" ? (
         <AgendaMarcaPanel brandName={brandName} agenda={agenda} />
       ) : vista === "motores" ? (
-        <Motores brandName={brandName} insumos={insumos} musica={musica} />
+        <Motores brandName={brandName} insumos={insumos} musica={musica} recomendada={musicaRecomendada} />
       ) : vista === "datos" ? (
         <DatosVigentesForm brandName={brandName} datos={datos} actualizado={datosAt} />
       ) : vista === "chat" ? (

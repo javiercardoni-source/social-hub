@@ -22,8 +22,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
-import { compactVideo, framesAt, grillaImagen, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { analyzeGrid, analyzeReference, classify, writeCaption, writeHolidayPhrase } from "./ai.ts"
+import { compactVideo, decodeAudio, framesAt, grillaImagen, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
+import { analyzeGrid, analyzeReference, classify, recomendarMusica, writeCaption, writeHolidayPhrase } from "./ai.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, exists, loadRenderPost, renderReviewed } from "./render.ts"
@@ -53,7 +53,9 @@ import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
 import { describirEstilo, llevaTexto, normalizarEstilo, ordenarGrilla, type Pieza } from "../../shared/cos/grilla.ts"
-import { TRAITS_VERSION, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
+import { TRAITS_VERSION, analizarAudio, normalizarRasgos, ritmoDeCortes } from "../../shared/cos/gustos.ts"
+import { cortesDesdeTomas, leerCapcut, leerOgVideo, tipoDeLink } from "../../shared/cos/referencia-link.ts"
+import { alPulso, perfilMusical, ritmoDeReferencias, type MusicaRef } from "../../shared/cos/ritmo.ts"
 import { gustosHandlers } from "./gustos.ts"
 import { agendaHandlers } from "./agenda.ts"
 import { tasteHandlers } from "./taste.ts"
@@ -117,6 +119,7 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
     .eq("status", "lista")
     .order("created_at", { ascending: false })
   const de = (p: Para) => resumenEstilo((refs ?? []).filter((r) => r.para === p).map((r) => r.analysis as FichaRef), p)
+  const ritmoReel = ritmoDeReferencias((refs ?? []).filter((r) => r.para === "reel").map((r) => (r.analysis as FichaRef | null)?.medidas))
   // Lo que el dueño rechazó en los últimos 90 días y por qué: la IA aprende de eso.
   const { data: rech } = await db
     .from("cos_posts")
@@ -129,7 +132,7 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
   const lecciones = leccionesDeRechazos(
     (rech ?? []).map((r) => ({ reasons: r.reject_reasons ?? [], note: r.reject_note, post_type: r.post_type, caption: r.caption, overlay_text: r.overlay_text, at: r.rejected_at as string })),
   )
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones }
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones, ritmoReel }
 }
 
 type AssetRow = {
@@ -1505,38 +1508,121 @@ const importDriveFile: Handler = async (job, { db, queue, log }) => {
   log("base de fotos: traído al Archivo", { brand: brandId, file: fileId, asset: asset.id })
 }
 
-// ── ref:analyze (Marca → Motores) ───────────────────────────────────────────
-/** Ficha de estilo de una referencia: cortes medidos con ffmpeg + lectura de la IA. */
-const analyzeRef: Handler = async (job, { db, log }) => {
-  const id = idFrom(job, "ref_id")
-  const { data: r, error } = await db.from("cos_brand_assets").select("id, brand_id, kind, storage_key, mime, note, para").eq("id", id).single()
+// ── ref:analyze / ref:link (Marca → Motores) ───────────────────────────────
+/**
+ * Ficha de estilo de una referencia: cortes (los EXACTOS de la plantilla si vino de un link de CapCut;
+ * si no, medidos con ffmpeg), sonido medido (BPM, energía, cuánto corta al pulso) + lectura de la IA.
+ */
+async function analizarRef(db: SupabaseClient, queue: Queue, id: string, log: (m: string, e?: Record<string, unknown>) => void) {
+  const { data: r, error } = await db.from("cos_brand_assets").select("id, brand_id, kind, storage_key, mime, note, para, link_meta").eq("id", id).single()
   if (error || !r) return log("referencia borrada antes de analizarse", { ref: id })
   if (r.kind !== "referencia") return
+  const link = (r.link_meta ?? null) as { tomas?: number[]; cortes?: number[] } | null
   try {
     const original = await supabaseStorage(db).download(r.storage_key)
     const esVideo = r.mime.startsWith("video/")
-    const { frames, duracion, cortes } = await withTmp(async (dir) => {
+    const { frames, duracion, cortes, musica } = await withTmp(async (dir) => {
       const f = await writeTmp(dir, esVideo ? "ref.mp4" : "ref", original)
-      if (!esVideo) return { frames: [{ at: null, data: await toJpeg(f, dir) }], duracion: null, cortes: null }
+      if (!esVideo) return { frames: [{ at: null, data: await toJpeg(f, dir) }], duracion: null, cortes: null, musica: null }
       const info = await probe(f, r.mime)
       const dur = (info.durationMs ?? 0) / 1000
-      const cuts = await sceneCuts(f)
+      const cuts = link?.cortes?.length ? link.cortes.filter((c) => c > 0 && c < dur) : await sceneCuts(f)
       // 10 cuadros parejos a lo largo del video (la IA los ve en orden, con su segundo).
       const n = Math.min(10, Math.max(3, Math.ceil(dur)))
       const times = Array.from({ length: n }, (_, i) => (dur * (i + 0.5)) / n)
       const imgs = await framesAt(f, times, dir)
-      return { frames: imgs.map((data, i) => ({ at: times[i], data })), duracion: dur, cortes: cuts }
+      // Sonido: BPM y energía con el mismo medidor de la biblioteca (si el video no tiene audio, nada).
+      const audio = await decodeAudio(f).then((x) => (x.length > 11025 ? analizarAudio(x, 11025) : null)).catch(() => null)
+      const tomasS = link?.tomas?.length ? link.tomas : [...cuts, dur].map((c, k, a) => c - (k ? a[k - 1] : 0))
+      return {
+        frames: imgs.map((data, i) => ({ at: times[i], data })),
+        duracion: dur,
+        cortes: cuts,
+        musica: audio ? { bpm: audio.bpm, confianza: audio.bpmConfianza, energia: audio.energy, al_pulso: alPulso(tomasS, audio.bpm) } : null,
+      }
     })
     const s = await settings(db)
-    const ficha = await analyzeReference({ db, model: s.ai_model, brand: await brandContext(db, r.brand_id), frames, duracion, cortes, nota: r.note, para: r.para ?? undefined })
-    const medidas = duracion != null ? { duracion_s: Math.round(duracion * 10) / 10, cortes: cortes!.length, toma_promedio_s: Math.round((duracion / (cortes!.length + 1)) * 10) / 10 } : null
-    await db.from("cos_brand_assets").update({ status: "lista", analysis: { ...ficha, medidas }, error: null }).eq("id", id)
-    log("referencia analizada", { ref: id, cortes: cortes?.length ?? null })
+    const ficha = await analyzeReference({ db, model: s.ai_model, brand: await brandContext(db, r.brand_id), frames, duracion, cortes, nota: r.note, para: r.para ?? undefined, exactos: !!link?.cortes?.length, musica })
+    const medidas = duracion != null ? { duracion_s: Math.round(duracion * 10) / 10, cortes: cortes!.length, toma_promedio_s: Math.round((duracion / (cortes!.length + 1)) * 100) / 100 } : null
+    await db.from("cos_brand_assets").update({ status: "lista", analysis: { ...ficha, medidas, musica }, error: null }).eq("id", id)
+    log("referencia analizada", { ref: id, cortes: cortes?.length ?? null, bpm: musica?.bpm ?? null })
+    // Con referencias de reels nuevas, se rehace la recomendación de qué música buscar.
+    if (r.para === "reel") await queue.enqueue("musica:recomendar", { brand_id: r.brand_id }, { dedupeKey: `musica:recomendar:${r.brand_id}`, runAt: new Date(Date.now() + 60_000) })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await db.from("cos_brand_assets").update({ status: "error", error: msg.slice(0, 300) }).eq("id", id)
     throw e
   }
+}
+
+const analyzeRef: Handler = async (job, { db, queue, log }) => analizarRef(db, queue, idFrom(job, "ref_id"), log)
+
+/**
+ * Referencia pegada como link: baja la página, saca el video (CapCut: video de muestra + duración exacta
+ * de cada toma; otros: og:video), lo guarda en cos-media y la analiza. Instagram y TikTok suelen pedir
+ * sesión: si no se puede, queda el aviso para subir el archivo.
+ */
+const refLink: Handler = async (job, { db, queue, log }) => {
+  const id = idFrom(job, "ref_id")
+  const { data: r } = await db.from("cos_brand_assets").select("id, storage_key, source_url").eq("id", id).maybeSingle()
+  if (!r?.source_url) return
+  const falla = async (msg: string) => {
+    await db.from("cos_brand_assets").update({ status: "error", error: msg }).eq("id", id)
+    log("referencia por link: no se pudo", { ref: id, msg })
+  }
+  const tipo = tipoDeLink(r.source_url)
+  const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+  let html = ""
+  try {
+    const res = await fetch(r.source_url, { headers: { "user-agent": UA, "accept-language": "es-AR,es;q=0.9" }, redirect: "follow", signal: AbortSignal.timeout(20_000) })
+    if (!res.ok) return falla(`La página respondió ${res.status}. Subí el video como archivo.`)
+    html = await res.text()
+  } catch (e) {
+    return falla(`No se pudo abrir el link (${String(e).slice(0, 80)}). Subí el video como archivo.`)
+  }
+  const capcut = tipo === "capcut" ? leerCapcut(html) : null
+  const videoUrl = capcut?.videoUrl ?? leerOgVideo(html)
+  if (!videoUrl) {
+    return falla(
+      tipo === "instagram" || tipo === "tiktok"
+        ? "Instagram y TikTok no dejan bajar el video sin iniciar sesión. Grabá la pantalla o descargalo y subilo como archivo."
+        : "En esa página no encontré un video. Subilo como archivo.",
+    )
+  }
+  const vid = await fetch(videoUrl, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60_000) })
+  if (!vid.ok) return falla(`No se pudo bajar el video (HTTP ${vid.status}). Subilo como archivo.`)
+  const buf = Buffer.from(await vid.arrayBuffer())
+  if (buf.length > 48 * 1024 * 1024) return falla("El video pesa más de 48 MB. Recortalo y subilo como archivo.")
+  await supabaseStorage(db).upload(r.storage_key, buf, "video/mp4")
+  const link_meta = capcut ? { fuente: "capcut", tomas: capcut.tomas, cortes: cortesDesdeTomas(capcut.tomas), duracion: capcut.duracion } : { fuente: tipo }
+  await db.from("cos_brand_assets").update({ link_meta, size_bytes: buf.length }).eq("id", id)
+  await analizarRef(db, queue, id, log)
+}
+
+// ── musica:recomendar ──────────────────────────────────────────────────────
+/** Qué música buscar: el ritmo y la energía medidos en las referencias de Reels + su estilo visual. */
+const recomendarMusicaMarca: Handler = async (job, { db, log }) => {
+  const brandId = String(job.payload.brand_id ?? "")
+  const { data: refs } = await db.from("cos_brand_assets").select("analysis").eq("brand_id", brandId).eq("kind", "referencia").eq("para", "reel").eq("status", "lista")
+  const fichas = (refs ?? []).map((x) => x.analysis as (FichaRef & { musica?: MusicaRef }) | null).filter((x): x is FichaRef & { musica?: MusicaRef } => !!x)
+  const perfil = perfilMusical(fichas.map((f) => f.musica))
+  if (!perfil.n) {
+    await db.from("cos_brands").update({ musica_recomendada: null, musica_recomendada_at: new Date().toISOString() }).eq("id", brandId)
+    return
+  }
+  const { data: temas } = await db.from("cos_music_tracks").select("title, bpm, energy, genre, mood").eq("brand_id", brandId).eq("active", true)
+  const s = await settings(db)
+  const rec = await recomendarMusica({
+    db,
+    model: s.ai_model,
+    brand: await brandContext(db, brandId),
+    perfil,
+    ritmo: ritmoDeReferencias(fichas.map((f) => f.medidas)),
+    estilos: fichas.map((f) => f.resumen ?? "").filter(Boolean).slice(0, 6),
+    biblioteca: (temas ?? []).map((t) => `${t.title} (${t.bpm ? Math.round(Number(t.bpm)) + " BPM" : "BPM ?"}${t.genre ? ", " + t.genre : ""})`),
+  })
+  await db.from("cos_brands").update({ musica_recomendada: { ...rec, perfil }, musica_recomendada_at: new Date().toISOString() }).eq("id", brandId)
+  log("música recomendada", { brand: brandId, bpm: perfil.bpm, energia: perfil.energia })
 }
 
 // ── feed:analyze (F6) ───────────────────────────────────────────────────────
@@ -1769,6 +1855,8 @@ export const handlers: Record<string, Handler> = {
   "archive:import-ig": importInstagram,
   "archive:scan-drive": scanDrive,
   "ref:analyze": analyzeRef,
+  "ref:link": refLink,
+  "musica:recomendar": recomendarMusicaMarca,
   "holiday:stories": holidayStories,
   "feed:analyze": analyzeFeed,
   "archive:import-drive-file": importDriveFile,

@@ -109,3 +109,23 @@ describe("reglas de marca y cierre (F9)", () => {
     expect(firmaReel({ ...base, guion: { ...guion, tomas: guion.tomas.map((t) => ({ ...t, por_que: "otro" })) } })).toBe(f0)
   })
 })
+
+describe("ritmo ráfaga", () => {
+  const fuentes = [{ tipo: "video" as const, duracion: 20 }, { tipo: "foto" as const, duracion: null }]
+  it("acepta tomas cortas y muchas, todas con corte seco", () => {
+    const tomas = Array.from({ length: 30 }, (_, i) => ({ fuente: i % 2, trim_start: i * 0.5, duracion: 0.6, transicion: "fundido" }))
+    const g = normalizarGuion({ tomas, gancho: "armá tus 5" }, fuentes, [], { ritmo: "rafaga" })
+    expect(g.tomas).toHaveLength(24)
+    expect(g.tomas.every((t) => t.duracion === 0.6 && t.transicion === "corte")).toBe(true)
+    expect(g.ritmo).toBe("rafaga")
+  })
+  it("normal sigue igual (sin ritmo en el guion)", () => {
+    const g = normalizarGuion({ tomas: [{ fuente: 0, duracion: 0.6 }] }, fuentes)
+    expect(g.tomas[0].duracion).toBe(1.5)
+    expect(g.ritmo).toBeUndefined()
+  })
+  it("en ráfaga los clips no se superponen", () => {
+    const l = lineaDeTiempo([{ duracion: 0.5, transicion: "corte" }, { duracion: 0.5, transicion: "corte" }], "rafaga")
+    expect(l.inicios).toEqual([0, 0.5])
+  })
+})

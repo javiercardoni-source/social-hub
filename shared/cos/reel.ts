@@ -2,6 +2,7 @@
  * Guion de un reel (F9 · video primero). Lo propone la IA y lo arma el motor del worker.
  * Sin dependencias: lo usan el worker y los tests.
  */
+import { LIMITES_RITMO, type Ritmo } from "./ritmo.ts"
 
 export type Movimiento = "acercar" | "alejar" | "paneo_derecha" | "paneo_izquierda"
 export type Transicion = "corte" | "fundido"
@@ -27,6 +28,8 @@ export type GuionReel = {
   idea: string // una línea: qué cuenta el reel
   /** Precio y pie del cierre, congelados al armar el borrador (salen de Datos vigentes, nunca de la IA). */
   cierre?: { precio: string | null; pie: string | null }
+  /** «ráfaga»: muchas tomas cortas, cortes secos al pulso (sale de las referencias de Reels de la marca). */
+  ritmo?: Ritmo
 }
 
 export const RECUADROS = ["SUSHI PREMIUM", "PRECIO INTELIGENTE", "PEDILO ONLINE", "PLAN EN CASA", "ENTRÁ Y PEDÍ", "PEDÍ ONLINE", "DELIVERY"] as const
@@ -62,19 +65,21 @@ export function normalizarGuion(
   raw: unknown,
   fuentes: Fuente[],
   musicas: string[] = [],
-  opts: { combos?: string[]; prohibidas?: string[] } = {},
+  opts: { combos?: string[]; prohibidas?: string[]; ritmo?: Ritmo } = {},
 ): GuionReel {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
   const tomas: Toma[] = []
+  const ritmo: Ritmo = opts.ritmo ?? "normal"
+  const lim = ritmo === "rafaga" ? LIMITES_RITMO.rafaga : { min: TOMA_MIN, max: TOMA_MAX, maxTomas: 8 }
   for (const t of Array.isArray(r.tomas) ? (r.tomas as Record<string, unknown>[]) : []) {
     const i = num(t.fuente, -1)
     const f = fuentes[i]
     if (!f || !Number.isInteger(i)) continue
-    let duracion = clamp(num(t.duracion, 2.4), TOMA_MIN, TOMA_MAX)
+    let duracion = clamp(num(t.duracion, ritmo === "rafaga" ? 0.7 : 2.4), lim.min, lim.max)
     let trim = 0
     if (f.tipo === "video") {
       const total = f.duracion ?? 0
-      if (total < 0.8) continue
+      if (total < (ritmo === "rafaga" ? lim.min : 0.8)) continue
       duracion = Math.min(duracion, total)
       trim = clamp(num(t.trim_start, 0), 0, Math.max(0, total - duracion))
     }
@@ -85,10 +90,11 @@ export function normalizarGuion(
       movimiento: MOVS.includes(t.movimiento as Movimiento) ? (t.movimiento as Movimiento) : "acercar",
       foco_x: clamp(num(t.foco_x, 0.5), 0.15, 0.85),
       foco_y: clamp(num(t.foco_y, 0.5), 0.15, 0.85),
-      transicion: tomas.length === 0 ? "corte" : t.transicion === "fundido" ? "fundido" : "corte",
+      // En ráfaga, todos cortes secos (así se arma uniendo los clips, sin superponerlos).
+      transicion: tomas.length === 0 || ritmo === "rafaga" ? "corte" : t.transicion === "fundido" ? "fundido" : "corte",
       por_que: typeof t.por_que === "string" ? t.por_que.replace(/\s+/g, " ").trim().slice(0, 160) : "",
     })
-    if (tomas.length >= 8) break
+    if (tomas.length >= lim.maxTomas) break
   }
   const recuadro = texto(r.recuadro, 24)
   const musica = typeof r.musica === "string" && musicas.includes(r.musica) ? r.musica : (musicas[0] ?? null)
@@ -111,6 +117,7 @@ export function normalizarGuion(
     musica,
     combo,
     idea: typeof r.idea === "string" ? r.idea.replace(/\s+/g, " ").trim().slice(0, 240) : "",
+    ...(ritmo === "rafaga" ? { ritmo } : {}),
   }
 }
 
@@ -171,11 +178,12 @@ export function firmaReel(p: { version: string; guion: GuionReel; gancho: string
 }
 
 /** Cuándo empieza cada toma y el cierre (las transiciones se superponen) y cuánto dura todo. */
-export function lineaDeTiempo(tomas: Pick<Toma, "duracion" | "transicion">[]): { inicios: number[]; cierre: number; total: number } {
+export function lineaDeTiempo(tomas: Pick<Toma, "duracion" | "transicion">[], ritmo: Ritmo = "normal"): { inicios: number[]; cierre: number; total: number } {
   const inicios: number[] = []
   let fin = 0
   tomas.forEach((t, i) => {
-    const solapa = i === 0 ? 0 : t.transicion === "fundido" ? FUNDIDO : CORTE
+    // Ráfaga: los clips se unen uno detrás del otro (sin superponer); normal: fundido de un cuadro o más.
+    const solapa = i === 0 || ritmo === "rafaga" ? 0 : t.transicion === "fundido" ? FUNDIDO : CORTE
     const ini = i === 0 ? 0 : fin - solapa
     inicios.push(ini)
     fin = ini + t.duracion

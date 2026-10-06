@@ -6,7 +6,7 @@ import { AlertTriangle, CheckCircle, Circle, Loader2, Play, Plus, RefreshCw, Tra
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { createClient } from "@/lib/supabase/client"
-import { borrarMotor, borrarMusica, cambiarParaReferencia, etiquetarTema, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
+import { agregarReferenciaPorLink, borrarMotor, borrarMusica, cambiarParaReferencia, etiquetarTema, pedirMusicaRecomendada, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
 import { explicarError } from "@/lib/ui-errors"
 import { cn } from "@/lib/utils"
 import { validarArchivo, type KindMotor } from "../../../../shared/cos/motores"
@@ -31,6 +31,17 @@ export type Insumo = { id: string; kind: KindMotor; name: string; url: string | 
 /** Ficha de un tema (F7): lo medido por el worker + lo marcado a mano. */
 export type FichaTema = EtiquetasTema & { id: string; duracion: number | null; bpm: number | null; energia: number | null; estado: "midiendo" | "lista" | "error" }
 export type Tema = { key: string; name: string; url: string | null; ficha: FichaTema | null }
+/** Qué música buscar (worker: musica:recomendar), según las referencias de Reels de la marca. */
+export type MusicaRecomendadaUI = {
+  resumen: string
+  generos: string[]
+  moods: string[]
+  voz: string
+  buscar: string[]
+  evitar: string[]
+  faltan: string
+  perfil: { n: number; bpm: number | null; bpmMin: number | null; bpmMax: number | null; energia: string | null }
+}
 
 const ACEPTA: Record<KindMotor, string> = {
   referencia: "video/mp4,video/quicktime,image/jpeg,image/png,image/webp",
@@ -165,6 +176,123 @@ function FichaVista({ f }: { f: Ficha }) {
   )
 }
 
+/** Agregar una referencia pegando el link (CapCut trae la duración exacta de cada toma). */
+function PegarLink({ para, nota, onMsg }: { para: Para; nota: string; onMsg: (m: string) => void }) {
+  const router = useRouter()
+  const [url, setUrl] = useState("")
+  const [pending, start] = useTransition()
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 border-b px-4 py-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (!url.trim()) return
+        start(async () => {
+          try {
+            const r = await agregarReferenciaPorLink({ url, para, note: nota })
+            setUrl("")
+            onMsg(
+              r.tipo === "capcut"
+                ? "Listo: bajo la plantilla con la duración exacta de cada toma y armo la ficha (un minuto)."
+                : r.tipo === "instagram" || r.tipo === "tiktok"
+                  ? "Lo intento: Instagram y TikTok a veces no dejan bajar el video. Si falla, te aviso y lo subís como archivo."
+                  : "Lo intento: si la página no trae el video, te aviso y lo subís como archivo.",
+            )
+            router.refresh()
+          } catch (err) {
+            onMsg(explicarError(err))
+          }
+        })
+      }}
+    >
+      <label htmlFor={`link-${para}`} className="sr-only">Link de la referencia</label>
+      <input
+        id={`link-${para}`}
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        inputMode="url"
+        placeholder={`Pegar link (plantilla de CapCut u otro video) para ${PARA_TEXTO[para]}`}
+        className="min-w-[220px] flex-1 rounded-lg border bg-background px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+      />
+      <Button size="sm" type="submit" variant="outline" disabled={pending || !url.trim()}>
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+        Agregar link
+      </Button>
+    </form>
+  )
+}
+
+/** Qué música buscar para la biblioteca, según el ritmo y la energía medidos en las referencias de Reels. */
+function TarjetaMusica({ r, onMsg }: { r: MusicaRecomendadaUI | null; onMsg: (m: string) => void }) {
+  const router = useRouter()
+  const [pending, start] = useTransition()
+  const pedir = () =>
+    start(async () => {
+      try {
+        await pedirMusicaRecomendada()
+        onMsg("Armando la recomendación con tus referencias de Reels (un minuto).")
+        setTimeout(() => router.refresh(), 45_000)
+      } catch (err) {
+        onMsg(explicarError(err))
+      }
+    })
+  if (!r) {
+    return (
+      <div className="rounded-lg border border-dashed bg-background px-3 py-2.5 text-xs text-muted-foreground">
+        <b className="text-foreground">Qué música buscar:</b> cargá referencias de <b>Reels</b> con sonido (videos o links de CapCut) y te digo qué tipo de música conviene buscar: BPM, energía, géneros y qué escribir en el buscador.
+        <Button size="sm" variant="ghost" className="ml-1 h-7 px-2 text-xs" disabled={pending} onClick={pedir}>
+          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Calcular
+        </Button>
+      </div>
+    )
+  }
+  const p = r.perfil
+  return (
+    <div className="space-y-2 rounded-lg border bg-background px-3 py-2.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <b className="text-sm">Qué música buscar</b>
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={pending} onClick={pedir}>
+          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Recalcular
+        </Button>
+      </div>
+      <p>{r.resumen}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {p.bpm && <span className="rounded-full bg-muted px-2 py-0.5 font-mono">{p.bpmMin}–{p.bpmMax} BPM</span>}
+        {p.energia && <span className="rounded-full bg-muted px-2 py-0.5">energía {p.energia}</span>}
+        <span className="rounded-full bg-muted px-2 py-0.5">{r.voz}</span>
+        <span className="rounded-full bg-muted px-2 py-0.5">sale de {p.n} referencia{p.n === 1 ? "" : "s"}</span>
+      </div>
+      <p><b>Géneros:</b> <span className="text-muted-foreground">{r.generos.join(" · ")}</span></p>
+      <p><b>Clima:</b> <span className="text-muted-foreground">{r.moods.join(" · ")}</span></p>
+      <div>
+        <b>Para buscar</b> <span className="text-muted-foreground">(Pixabay Music, YouTube Audio Library, Uppbeat)</span>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {r.buscar.map((q) => (
+            <button
+              key={q}
+              type="button"
+              title="Copiar"
+              className="rounded-md border px-2 py-0.5 font-mono hover:bg-muted"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(q)
+                  onMsg(`Copiado: «${q}»`)
+                } catch {
+                  onMsg(q)
+                }
+              }}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      </div>
+      {r.evitar.length > 0 && <p><b>Evitar:</b> <span className="text-muted-foreground">{r.evitar.join(" · ")}</span></p>}
+      {r.faltan && <p><b>Le falta a tu biblioteca:</b> <span className="text-muted-foreground">{r.faltan}</span></p>}
+    </div>
+  )
+}
+
 /**
  * Referencias como el feed de un perfil de Instagram: grilla de 3 columnas, lo más nuevo
  * primero, un cuadro «+» para agregar y ✕ para sacar. Tocando una se ve grande con su ficha.
@@ -223,6 +351,7 @@ function FeedReferencias({ brandName, refs: todas, nota, onMsg }: { brandName: s
         })}
       </div>
       <p className="border-b px-4 py-2 text-xs text-muted-foreground">{PARA_AYUDA[para]}</p>
+      <PegarLink para={para} nota={nota} onMsg={onMsg} />
 
       {/* Grilla */}
       <div className="grid grid-cols-3 gap-0.5 bg-border">
@@ -349,7 +478,7 @@ function Seccion({ n, titulo, ayuda, listo, opcional, children }: { n: number; t
  * Marca → Motores: todo lo que los motores visuales necesitan de la marca, con su estado.
  * Nada es obligatorio para seguir publicando: lo que falta se reemplaza por lo de siempre.
  */
-export function Motores({ brandName, insumos, musica }: { brandName: string; insumos: Insumo[]; musica: Tema[] }) {
+export function Motores({ brandName, insumos, musica, recomendada }: { brandName: string; insumos: Insumo[]; musica: Tema[]; recomendada: MusicaRecomendadaUI | null }) {
   const router = useRouter()
   const [msg, setMsg] = useState<string | null>(null)
   const [nota, setNota] = useState("")
@@ -446,6 +575,7 @@ export function Motores({ brandName, insumos, musica }: { brandName: string; ins
           ayuda="Los temas de esta marca (MP3, M4A, WAV). De acá sale la música de reels e historias. Con licencia de uso libre (ej. Pixabay). Duración, BPM y energía se miden solos; marcá género, mood y voz con los chips: con eso el motor aprende qué música le gusta a tu público."
           listo={musica.length > 0}
         >
+          <TarjetaMusica r={recomendada} onMsg={setMsg} />
           <Subir kind="musica" etiqueta="Subir temas" multiple onDone={setMsg} />
           {musica.length > 0 && (
             <div className="flex flex-col gap-2">

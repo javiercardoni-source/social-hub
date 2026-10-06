@@ -23,6 +23,7 @@ import { KITS, kitDeMarca, type KitMarca } from "./overlay.ts"
 import { exists, loadKit } from "./render.ts"
 import { planReel, type BloqueFuente } from "./ai.ts"
 import { CIERRE, FUNDIDO, CORTE, firmaReel, guionPorDefecto, lineaDeTiempo, normalizarGuion, type Fuente, type GuionReel } from "../../shared/cos/reel.ts"
+import { ajustarAlPulso } from "../../shared/cos/ritmo.ts"
 import type { BrandContext } from "../../shared/cos/prompts.ts"
 
 const run = promisify(execFile)
@@ -111,7 +112,20 @@ export async function planearReel(opts: {
   const { fuentes, bloques } = await fuentesParaGuion(opts.db, opts.versiones)
   try {
     const raw = await planReel({ db: opts.db, model: opts.model, brand: opts.brand, bloques, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, assetId: opts.assetId, postId: opts.postId })
-    const guion = normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas })
+    const ritmo = opts.brand.ritmoReel ?? "normal"
+    const guion = normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas, ritmo })
+    if (ritmo === "rafaga" && guion.musica) {
+      // Cortes al pulso: cada toma dura un número entero de pulsos del tema elegido.
+      const { data: tema } = await opts.db.from("cos_music_tracks").select("bpm, bpm_confidence").eq("storage_key", `music/${opts.brand.slug}/${guion.musica}`).maybeSingle()
+      if (tema?.bpm && Number(tema.bpm_confidence ?? 0) >= 0.3) {
+        guion.tomas = ajustarAlPulso(guion.tomas, Number(tema.bpm), "rafaga").map((t) => {
+          // Si al alargar se pasa del final del video, se corre el inicio para que entre.
+          const f = fuentes[t.fuente]
+          if (f?.tipo !== "video" || f.duracion == null || t.trim_start + t.duracion <= f.duracion) return t
+          return { ...t, trim_start: Math.max(0, Math.round((f.duracion - t.duracion) * 100) / 100), duracion: Math.min(t.duracion, f.duracion) }
+        })
+      }
+    }
     if (guion.tomas.length >= 2) return { guion, fuentes, respaldo: false }
     opts.log("el guion de la IA no dejó tomas usables: va el de respaldo", { tomas: guion.tomas.length })
   } catch (e) {
@@ -195,9 +209,22 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", join(dir, "ncierre.mp4")])
 
   // 3) Unión con xfade (un corte es un fundido de un cuadro) + textos con fundido + música.
-  const lt = lineaDeTiempo(g.tomas)
-  const partes = [...g.tomas.map((t, i) => ({ f: join(dir, `n${i}.mp4`), tr: i === 0 ? null : t.transicion })), { f: join(dir, "ncierre.mp4"), tr: "fundido" as const }]
-  const inicios = [...lt.inicios, lt.cierre]
+  //    Ráfaga (10 a 24 tomas): los clips se pegan uno detrás del otro con el demuxer concat (cortes
+  //    secos, poca memoria: el worker no aguanta 24 entradas 1080×1920 abiertas a la vez) y después
+  //    se hace un solo fundido hacia la placa final.
+  const rafaga = g.ritmo === "rafaga"
+  const lt = lineaDeTiempo(g.tomas, g.ritmo)
+  let partes: { f: string; tr: "corte" | "fundido" | null }[]
+  let inicios: number[]
+  if (rafaga) {
+    await writeFile(join(dir, "lista.txt"), g.tomas.map((_, i) => `file '${join(dir, `n${i}.mp4`)}'`).join("\n"))
+    await ff(["-f", "concat", "-safe", "0", "-i", join(dir, "lista.txt"), "-c", "copy", join(dir, "base.mp4")])
+    partes = [{ f: join(dir, "base.mp4"), tr: null }, { f: join(dir, "ncierre.mp4"), tr: "fundido" }]
+    inicios = [0, lt.cierre]
+  } else {
+    partes = [...g.tomas.map((t, i) => ({ f: join(dir, `n${i}.mp4`), tr: i === 0 ? null : t.transicion })), { f: join(dir, "ncierre.mp4"), tr: "fundido" as const }]
+    inicios = [...lt.inicios, lt.cierre]
+  }
   let filtro = ""
   let prev = "[0:v]"
   for (let i = 1; i < partes.length; i++) {
@@ -211,13 +238,13 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
   const capas: string[] = []
   if (opts.gancho) {
     extra.push("-loop", "1", "-t", "2", "-i", join(dir, "t-gancho.png"))
-    filtro += `[${idx}:v]format=rgba,fade=in:st=0:d=0.45:alpha=1,fade=out:st=1.7:d=0.3:alpha=1,setpts=PTS+${(inicios[0] + 0.3).toFixed(2)}/TB[g];`
+    filtro += `[${idx}:v]format=rgba,fade=in:st=0:d=0.45:alpha=1,fade=out:st=1.7:d=0.3:alpha=1,setpts=PTS+${(lt.inicios[0] + 0.3).toFixed(2)}/TB[g];`
     capas.push("[g]")
     idx++
   }
-  if (g.medio && inicios[2] != null) {
+  if (g.medio && lt.inicios[2] != null) {
     extra.push("-loop", "1", "-t", "1.9", "-i", join(dir, "t-medio.png"))
-    filtro += `[${idx}:v]format=rgba,fade=in:st=0:d=0.45:alpha=1,fade=out:st=1.6:d=0.3:alpha=1,setpts=PTS+${(inicios[2] + 0.4).toFixed(2)}/TB[m];`
+    filtro += `[${idx}:v]format=rgba,fade=in:st=0:d=0.45:alpha=1,fade=out:st=1.6:d=0.3:alpha=1,setpts=PTS+${(lt.inicios[2] + 0.4).toFixed(2)}/TB[m];`
     capas.push("[m]")
     idx++
   }

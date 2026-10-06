@@ -274,6 +274,10 @@ export async function analyzeReference(opts: {
   nota: string | null
   /** Para qué formato es la referencia: cambia en qué se fija la ficha. */
   para?: "post" | "reel" | "historia"
+  /** Los cortes son los EXACTOS de la plantilla (link de CapCut), no medidos. */
+  exactos?: boolean
+  /** Sonido medido del video (BPM, energía 0-1, % de tomas al pulso). */
+  musica?: { bpm: number | null; energia: number; al_pulso: number | null } | null
 }): Promise<FichaEstilo> {
   const esVideo = opts.duracion != null
   const datos = esVideo
@@ -281,6 +285,11 @@ export async function analyzeReference(opts: {
       `(${opts.cortes!.length ? `en ${opts.cortes!.map((c) => c.toFixed(1)).join(", ")} s; toma promedio ${(opts.duracion! / (opts.cortes!.length + 1)).toFixed(1)} s` : "plano secuencia, sin cortes"}). ` +
       `Te paso ${opts.frames.length} cuadros en orden, cada uno con su segundo.`
     : "Es una PLACA (imagen fija)."
+  const sonido = opts.musica
+    ? ` Sonido medido: ${opts.musica.bpm ? `${opts.musica.bpm} BPM` : "pulso poco claro"}, energía ${Math.round(opts.musica.energia * 100)}/100` +
+      (opts.musica.al_pulso != null ? `; ${opts.musica.al_pulso} % de las tomas duran un número entero de pulsos (cortes al ritmo)` : "") + "."
+    : ""
+  const exactos = opts.exactos ? " (los cortes son los EXACTOS de la plantilla, no estimados)" : ""
   const response = await anthropic().messages.parse({
     model: opts.model,
     max_tokens: 4000,
@@ -297,7 +306,7 @@ export async function analyzeReference(opts: {
             type: "text",
             text: [
               "Sos director de arte y editor de video. Esta es una REFERENCIA DE ESTILO que el dueño eligió para inspirar las piezas de la marca.",
-              datos,
+              datos + exactos + sonido,
               opts.nota ? `Lo que le gusta de esta referencia: "${opts.nota}"` : "",
               opts.para === "reel"
                 ? "Es referencia para REELS: fijate sobre todo en el ritmo de cortes, la duración de cada toma, los planos, los movimientos de cámara, las transiciones, cuándo y cómo entra el texto y la estructura en el tiempo (gancho, desarrollo, cierre)."
@@ -505,7 +514,7 @@ export async function planReel(opts: {
               ? { type: "text" as const, text: b.texto }
               : { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.jpg.toString("base64") } },
           ),
-          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel }) },
+          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel, ritmo: opts.brand.ritmoReel }) },
         ],
       },
     ],
@@ -668,5 +677,54 @@ export async function escribirSugerencias(opts: { db: SupabaseClient; model: str
   })
   await logUsage(opts.db, { purpose: "taste:suggest", model: opts.model, usage: response.usage })
   if (!response.parsed_output) throw new Error(`la IA no devolvió sugerencias (stop: ${response.stop_reason})`)
+  return response.parsed_output
+}
+
+// ── Qué música buscar (Marca → Motores → Biblioteca de sonido) ──────────────
+
+export const MusicaRecomendada = z.object({
+  resumen: z.string().describe("Una o dos líneas: qué tipo de música conviene buscar para los reels de la marca y por qué (con el BPM y la energía medidos)"),
+  generos: z.array(z.string()).describe("2 a 4 géneros concretos (ej: 'house melódico', 'lo-fi hip hop', 'city pop japonés')"),
+  moods: z.array(z.string()).describe("2 a 4 climas (ej: 'arriba', 'elegante', 'veraniego')"),
+  voz: z.string().describe("'instrumental', 'con voz' o 'da igual', y por qué en pocas palabras"),
+  buscar: z.array(z.string()).describe("4 a 6 búsquedas listas para pegar en Pixabay Music o YouTube Audio Library, en inglés (ej: 'upbeat house 124 bpm')"),
+  evitar: z.array(z.string()).describe("1 a 3 cosas a evitar (ej: 'temas con letra en inglés explícita', 'intros largas')"),
+  faltan: z.string().describe("Qué le falta a la biblioteca actual de la marca respecto de esto (o '' si ya está cubierta)"),
+})
+export type MusicaRecomendada = z.infer<typeof MusicaRecomendada>
+
+export async function recomendarMusica(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  perfil: { n: number; bpm: number | null; bpmMin: number | null; bpmMax: number | null; energia: string | null }
+  ritmo: "normal" | "rafaga"
+  estilos: string[]
+  biblioteca: string[]
+}): Promise<MusicaRecomendada> {
+  const p = opts.perfil
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2500,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          "Sos director musical de reels. Con lo MEDIDO en las referencias de reels que eligió el dueño, decile qué música buscar para la biblioteca de la marca.",
+          `Referencias con sonido: ${p.n}. Pulso: ${p.bpm ? `${p.bpm} BPM (rango ${p.bpmMin}–${p.bpmMax})` : "no claro"}. Energía: ${p.energia ?? "sin dato"}.`,
+          `Ritmo de edición: ${opts.ritmo === "rafaga" ? "RÁFAGA, muchas tomas cortas al pulso: necesita pulso muy marcado y constante" : "normal, tomas de 2 a 3 s"}.`,
+          opts.estilos.length ? `Cómo se ven las referencias: ${opts.estilos.join(" / ")}` : "",
+          `Biblioteca actual de la marca: ${opts.biblioteca.length ? opts.biblioteca.join("; ") : "vacía"}.`,
+          "Reglas: solo música con licencia libre para redes (Pixabay Music, YouTube Audio Library, Uppbeat gratis); nunca recomiendes temas comerciales con copyright ni la música de las plantillas de CapCut; usá los números tal cual, no inventes otros.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ],
+    output_config: { format: zodOutputFormat(MusicaRecomendada) },
+  })
+  await logUsage(opts.db, { purpose: "musica:recomendar", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no devolvió la recomendación (stop: ${response.stop_reason})`)
   return response.parsed_output
 }

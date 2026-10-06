@@ -18,6 +18,8 @@ export type BrandContext = {
   estilos?: { post?: string; reel?: string; historia?: string }
   /** Lo que el dueño rechazó últimamente y por qué (shared/cos/rechazos.ts → leccionesDeRechazos). */
   lecciones?: string
+  /** Ritmo de los reels de la marca, según lo MEDIDO en sus referencias (shared/cos/ritmo.ts). */
+  ritmoReel?: "normal" | "rafaga"
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -164,15 +166,23 @@ export function reelPrompt(input: {
   anterior?: { gancho: string; idea: string }
   /** Estilo de las referencias de reels de la marca (resumenEstilo). */
   estilo?: string
+  /** «rafaga»: muchas tomas cortas, cortes secos al pulso (como las plantillas de CapCut). */
+  ritmo?: "normal" | "rafaga"
 }): string {
+  const rafaga = input.ritmo === "rafaga"
   return [
     `Sos editor de reels de ${input.marca}. Armás un REEL vertical 9:16 de 12 a 16 s con estas fuentes.`,
     "",
-    "Tomas: 4 a 6. Cada una sale de UNA fuente (una misma foto puede dar varias tomas con movimientos distintos):",
+    rafaga
+      ? "RITMO RÁFAGA (el estilo de la marca): 10 a 20 tomas CORTAS, todas con corte seco, al ritmo de la música. Cada una sale de UNA fuente; " +
+        "de una misma toma medida de un video podés sacar varias tomas cortas con distinto trim_start (otro momento del mismo plano), y de una foto, varias con movimientos distintos:"
+      : "Tomas: 4 a 6. Cada una sale de UNA fuente (una misma foto puede dar varias tomas con movimientos distintos):",
     "- video: trim_start y duracion en segundos, DENTRO de una sola toma medida (no cruces un corte).",
     "- foto: movimiento tipo Ken Burns (trim_start 0).",
-    "Duración de cada toma: 1.6 a 2.8 s. Arrancá con la más impactante. Alterná planos (general,",
-    "detalle, gente disfrutando si hay) y no repitas el mismo momento.",
+    rafaga
+      ? "Duración de cada toma: 0.5 a 1.1 s (después se ajusta al pulso exacto del tema). Arrancá con la más impactante y alterná planos para que cada corte muestre algo distinto."
+      : "Duración de cada toma: 1.6 a 2.8 s. Arrancá con la más impactante. Alterná planos (general,",
+    rafaga ? "" : "detalle, gente disfrutando si hay) y no repitas el mismo momento.",
     'movimiento: "acercar" | "alejar" | "paneo_derecha" | "paneo_izquierda".',
     "foco_x, foco_y (0 a 1): dónde está lo más apetitoso (hacia ahí se acerca la cámara).",
     'transicion de entrada: "corte" | "fundido" (mayoría cortes, al ritmo; fundido para respirar).',
@@ -197,7 +207,7 @@ export function reelPrompt(input: {
     "- No uses tomas de videos que ya tienen placas de texto viejas o logos de otras marcas.",
     "- Si hay personas, que sea disfrutando.",
     input.estilo?.trim()
-      ? `\n${input.estilo.trim()}\nAdaptá a ese estilo el orden de las tomas, su duración (siempre dentro de 1.6 a 2.8 s), los movimientos, ` +
+      ? `\n${input.estilo.trim()}\nAdaptá a ese estilo el orden de las tomas, su duración (siempre dentro de ${rafaga ? "0.5 a 1.1" : "1.6 a 2.8"} s), los movimientos, ` +
         "las transiciones y cuándo entra el texto. Las reglas de marca de arriba mandan sobre el estilo."
       : "",
     input.pedido?.trim() ? `\nPedido de quien aprueba: ${input.pedido.trim()}` : "",

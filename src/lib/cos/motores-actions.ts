@@ -9,6 +9,7 @@ import { getActiveBrand } from "@/lib/cos/brand"
 import { KINDS, extDe, validarArchivo, type KindMotor } from "../../../shared/cos/motores"
 import { esRutaDeMusica, normalizarEtiquetas, tituloTema } from "../../../shared/cos/gustos"
 import { PARAS, paraPorDefecto, type Para } from "../../../shared/cos/estilo"
+import { tipoDeLink } from "../../../shared/cos/referencia-link"
 
 /**
  * Marca → Motores: lo que cada marca le da a los motores visuales (referencias de estilo,
@@ -211,5 +212,48 @@ export async function cambiarParaReferencia(id: string, para: Para) {
   if (error) throw aviso(`No se pudo cambiar: ${error.message}`)
   if (!data?.length) throw aviso("Esa referencia no es de esta marca")
   await db.rpc("cos_enqueue_job", { p_type: "ref:analyze", p_payload: { ref_id: id }, p_run_at: new Date().toISOString(), p_dedupe_key: `ref:${id}:${para}` })
+  revalidatePath("/marca")
+}
+
+/**
+ * Referencia pegando un link (CapCut, o cualquier página con video). El worker baja el video, toma
+ * la duración exacta de cada toma si es una plantilla de CapCut, lo mide y arma la ficha.
+ */
+export async function agregarReferenciaPorLink(input: { url: string; para: Para; note?: string }) {
+  const { member, brand, db } = await marcaActiva()
+  const url = input.url.trim()
+  const tipo = tipoDeLink(url)
+  if (!tipo) throw aviso("Pegá un link completo que empiece con https://")
+  if (!PARAS.includes(input.para)) throw aviso("Formato inválido")
+  const { data: ya } = await db.from("cos_brand_assets").select("id").eq("brand_id", brand.id).eq("kind", "referencia").eq("source_url", url).maybeSingle()
+  if (ya) throw aviso("Ese link ya está en las referencias de la marca")
+  const key = `${carpeta("referencia", brand.slug)}/${randomUUID()}.mp4`
+  const nombre = tipo === "capcut" ? `Plantilla de CapCut ${url.match(/templates\/(\d+)/)?.[1] ?? ""}`.trim() : `Link de ${tipo === "otro" ? new URL(url).hostname : tipo}`
+  const { data: row, error } = await db
+    .from("cos_brand_assets")
+    .insert({
+      brand_id: brand.id,
+      kind: "referencia",
+      name: nombre.slice(0, 200),
+      storage_key: key,
+      mime: "video/mp4",
+      note: input.note?.trim().slice(0, 500) || null,
+      para: input.para,
+      source_url: url,
+      status: "analizando",
+      created_by: member.userId,
+    })
+    .select("id")
+    .single()
+  if (error || !row) throw aviso(`No se pudo guardar: ${error?.message}`)
+  await db.rpc("cos_enqueue_job", { p_type: "ref:link", p_payload: { ref_id: row.id }, p_run_at: new Date().toISOString(), p_dedupe_key: `ref:link:${row.id}` })
+  revalidatePath("/marca")
+  return { tipo }
+}
+
+/** Rehace ya la recomendación de qué música buscar (sale de las referencias de Reels). */
+export async function pedirMusicaRecomendada() {
+  const { brand, db } = await marcaActiva()
+  await db.rpc("cos_enqueue_job", { p_type: "musica:recomendar", p_payload: { brand_id: brand.id }, p_run_at: new Date().toISOString(), p_dedupe_key: `musica:recomendar:${brand.id}:ya` })
   revalidatePath("/marca")
 }

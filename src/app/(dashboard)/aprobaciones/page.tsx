@@ -181,7 +181,7 @@ export default async function AprobacionesPage() {
       reel: p.montaje
         ? {
             idea: p.montaje.idea ?? "",
-            segundos: Math.round(lineaDeTiempo(p.montaje.tomas ?? []).total),
+            segundos: Math.round(lineaDeTiempo(p.montaje.tomas ?? [], p.montaje.ritmo).total),
             tomas: (p.montaje.tomas ?? []).map((t) => ({ porQue: t.por_que ?? "", segundos: t.duracion, fuente: t.fuente })),
             fuentes: p.cos_post_media.length,
             respaldo: !!p.montaje.respaldo,
