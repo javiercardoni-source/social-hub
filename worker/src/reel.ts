@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import satori from "satori"
 import { Resvg } from "@resvg/resvg-js"
@@ -113,7 +113,9 @@ export async function planearReel(opts: {
   try {
     const raw = await planReel({ db: opts.db, model: opts.model, brand: opts.brand, bloques, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, assetId: opts.assetId, postId: opts.postId })
     const ritmo = opts.brand.ritmoReel ?? "normal"
-    const guion = normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas, ritmo })
+    const guion = normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas, ritmo, karaoke: !!opts.brand.karaoke })
+    // Con palabra por corte, la frase cumple el rol del gancho y del texto del medio.
+    if (guion.palabras?.length) guion.medio = ""
     if (ritmo === "rafaga" && guion.musica) {
       // Cortes al pulso: cada toma dura un número entero de pulsos del tema elegido.
       const { data: tema } = await opts.db.from("cos_music_tracks").select("bpm, bpm_confidence").eq("storage_key", `music/${opts.brand.slug}/${guion.musica}`).maybeSingle()
@@ -152,6 +154,12 @@ async function png(node: Nodo, file: string, kit: KitMarca) {
 const textoArriba = (t: string, kit: KitMarca) =>
   el({ width: W, height: H, justifyContent: "center", paddingTop: H * 0.24 - 60 }, [
     el({ fontFamily: kit.titulo.name, fontSize: 118, color: "#fff", textShadow: "0 0 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.85), 0 6px 28px rgba(0,0,0,0.6)", textAlign: "center", maxWidth: W - 120 }, t),
+  ])
+
+/** Palabra por corte: grande, al centro (un poco arriba), con contorno para leerse sobre cualquier toma. */
+const palabraCentro = (t: string, kit: KitMarca) =>
+  el({ width: W, height: H, justifyContent: "center", alignItems: "center", paddingBottom: H * 0.08 }, [
+    el({ fontFamily: kit.titulo.name, fontSize: t.length > 9 ? 150 : 190, color: "#fff", textShadow: "0 0 4px rgba(0,0,0,0.95), 0 3px 10px rgba(0,0,0,0.85), 0 8px 34px rgba(0,0,0,0.6)", textAlign: "center", maxWidth: W - 100, lineHeight: 1 }, t),
   ])
 
 /** Placa final: título, precio (solo si hay), recuadro, pie (solo si hay) y logo si la marca lleva. */
@@ -200,8 +208,29 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
     }
   }
-  // 2) Textos y cierre.
-  if (opts.gancho) await png(textoArriba(opts.gancho, kit), join(dir, "t-gancho.png"), kit)
+  // 1b) Palabra por corte (karaoke) y marcos inclinados: cada clip se compone sobre el color de la
+  //     marca, achicado e inclinado ±3° (alternando), con su palabra grande al centro.
+  if (g.inclinado || g.palabras?.length) {
+    const fondo = /^#[0-9a-f]{6}$/i.test(kit.etiqueta.bg) ? kit.etiqueta.bg : "#111111"
+    for (const [i, t] of g.tomas.entries()) {
+      const src = join(dir, `n${i}.mp4`)
+      const out = join(dir, `k${i}.mp4`)
+      const palabra = g.palabras?.[i]?.trim() ?? ""
+      const ang = g.inclinado ? (i % 2 ? -1 : 1) * 0.052 : 0
+      const marco = g.inclinado ? `scale=948:1686,rotate=${ang}:ow=${W}:oh=${H}:c=${fondo}` : "null"
+      if (palabra) {
+        await png(palabraCentro(palabra, kit), join(dir, `w${i}.png`), kit)
+        await ff(["-i", src, "-loop", "1", "-t", String(t.duracion), "-i", join(dir, `w${i}.png`), "-filter_complex", `[0:v]${marco}[b];[b][1:v]overlay=0:0:shortest=1,format=yuv420p,setsar=1[v]`, "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
+      } else {
+        await ff(["-i", src, "-vf", `${marco},format=yuv420p,setsar=1`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
+      }
+      await rename(out, src)
+    }
+  }
+
+  // 2) Textos y cierre. Con palabra por corte, la frase reemplaza al gancho y al texto del medio.
+  const conPalabras = !!g.palabras?.some((p) => p.trim())
+  if (opts.gancho && !conPalabras) await png(textoArriba(opts.gancho, kit), join(dir, "t-gancho.png"), kit)
   if (g.medio) await png(textoArriba(g.medio, kit), join(dir, "t-medio.png"), kit)
   await png(placaCierre(g, kit), join(dir, "cierre.png"), kit)
   await ff(["-loop", "1", "-t", String(CIERRE), "-i", join(dir, "cierre.png"), "-vf",
@@ -236,7 +265,7 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
   const extra: string[] = []
   let idx = n
   const capas: string[] = []
-  if (opts.gancho) {
+  if (opts.gancho && !conPalabras) {
     extra.push("-loop", "1", "-t", "2", "-i", join(dir, "t-gancho.png"))
     filtro += `[${idx}:v]format=rgba,fade=in:st=0:d=0.45:alpha=1,fade=out:st=1.7:d=0.3:alpha=1,setpts=PTS+${(lt.inicios[0] + 0.3).toFixed(2)}/TB[g];`
     capas.push("[g]")

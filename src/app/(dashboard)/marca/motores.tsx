@@ -6,7 +6,7 @@ import { AlertTriangle, CheckCircle, Circle, Loader2, Play, Plus, RefreshCw, Tra
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { createClient } from "@/lib/supabase/client"
-import { agregarReferenciaPorLink, borrarMotor, borrarMusica, cambiarParaReferencia, etiquetarTema, pedirMusicaRecomendada, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
+import { agregarReferenciaPorLink, borrarMotor, borrarMusica, cambiarKaraoke, cambiarParaReferencia, etiquetarTema, pedirMusicaRecomendada, prepararSubidaMotor, reanalizarReferencia, registrarMotor } from "@/lib/cos/motores-actions"
 import { explicarError } from "@/lib/ui-errors"
 import { cn } from "@/lib/utils"
 import { validarArchivo, type KindMotor } from "../../../../shared/cos/motores"
@@ -478,7 +478,7 @@ function Seccion({ n, titulo, ayuda, listo, opcional, children }: { n: number; t
  * Marca → Motores: todo lo que los motores visuales necesitan de la marca, con su estado.
  * Nada es obligatorio para seguir publicando: lo que falta se reemplaza por lo de siempre.
  */
-export function Motores({ brandName, insumos, musica, recomendada }: { brandName: string; insumos: Insumo[]; musica: Tema[]; recomendada: MusicaRecomendadaUI | null }) {
+export function Motores({ brandName, insumos, musica, recomendada, karaoke }: { brandName: string; insumos: Insumo[]; musica: Tema[]; recomendada: MusicaRecomendadaUI | null; karaoke: boolean }) {
   const router = useRouter()
   const [msg, setMsg] = useState<string | null>(null)
   const [nota, setNota] = useState("")
@@ -543,6 +543,15 @@ export function Motores({ brandName, insumos, musica, recomendada }: { brandName
             />
           </div>
           <FeedReferencias brandName={brandName} refs={refs} nota={nota} onMsg={(m) => (setMsg(m), setNota(""))} />
+          <label className="flex items-start gap-2 rounded-lg border bg-background px-3 py-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={karaoke} disabled={pending} onChange={(e) => run(() => cambiarKaraoke(e.target.checked))} />
+            <span>
+              <b>Reels con palabra por corte</b> <span className="text-muted-foreground">(estilo karaoke)</span>
+              <span className="block text-xs text-muted-foreground">
+                Cada toma lleva una palabra de una frase de la marca, que cae en el golpe de la música, en marcos inclinados sobre el color de la marca. Queda mejor con referencias de Reels rápidas (ritmo ráfaga).
+              </span>
+            </span>
+          </label>
         </Seccion>
 
         <Seccion

@@ -30,6 +30,10 @@ export type GuionReel = {
   cierre?: { precio: string | null; pie: string | null }
   /** «ráfaga»: muchas tomas cortas, cortes secos al pulso (sale de las referencias de Reels de la marca). */
   ritmo?: Ritmo
+  /** Palabra por corte (estilo karaoke): una palabra de una frase de la marca sobre cada toma. */
+  palabras?: string[]
+  /** Tomas en marcos levemente inclinados sobre el color de la marca (va con la palabra por corte). */
+  inclinado?: boolean
 }
 
 export const RECUADROS = ["SUSHI PREMIUM", "PRECIO INTELIGENTE", "PEDILO ONLINE", "PLAN EN CASA", "ENTRÁ Y PEDÍ", "PEDÍ ONLINE", "DELIVERY"] as const
@@ -65,7 +69,7 @@ export function normalizarGuion(
   raw: unknown,
   fuentes: Fuente[],
   musicas: string[] = [],
-  opts: { combos?: string[]; prohibidas?: string[]; ritmo?: Ritmo } = {},
+  opts: { combos?: string[]; prohibidas?: string[]; ritmo?: Ritmo; karaoke?: boolean } = {},
 ): GuionReel {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
   const tomas: Toma[] = []
@@ -118,7 +122,19 @@ export function normalizarGuion(
     combo,
     idea: typeof r.idea === "string" ? r.idea.replace(/\s+/g, " ").trim().slice(0, 240) : "",
     ...(ritmo === "rafaga" ? { ritmo } : {}),
+    ...(opts.karaoke ? karaoke(r.palabras, tomas.length, opts.prohibidas) : {}),
   }
+}
+
+/**
+ * Palabra por corte: una palabra (o dos cortas) por toma, en orden, del largo exacto de las tomas.
+ * Si la frase de la IA no pasa (palabra prohibida, precio) o no hay, no se ponen palabras.
+ */
+function karaoke(raw: unknown, n: number, prohibidas?: string[]): { palabras?: string[]; inclinado: true } {
+  const lista = (Array.isArray(raw) ? raw : []).map((p) => texto(p, 16)).filter(Boolean)
+  const frase = lista.join(" ")
+  if (!lista.length || /\$|\d{3,}/.test(frase) || tieneProhibida(frase, prohibidas)) return { inclinado: true }
+  return { palabras: Array.from({ length: n }, (_, i) => lista[i] ?? ""), inclinado: true }
 }
 
 /**

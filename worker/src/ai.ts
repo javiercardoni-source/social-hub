@@ -480,6 +480,7 @@ export const GuionIA = z.object({
   combo: z.string(),
   musica: z.string(),
   idea: z.string(),
+  palabras: z.array(z.string()).describe("Palabra por corte: una palabra por toma, en orden (vacío si no se pidió)"),
 })
 export type GuionIA = z.infer<typeof GuionIA>
 
@@ -514,7 +515,7 @@ export async function planReel(opts: {
               ? { type: "text" as const, text: b.texto }
               : { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.jpg.toString("base64") } },
           ),
-          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel, ritmo: opts.brand.ritmoReel }) },
+          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel, ritmo: opts.brand.ritmoReel, karaoke: opts.brand.karaoke }) },
         ],
       },
     ],

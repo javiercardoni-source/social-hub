@@ -129,3 +129,22 @@ describe("ritmo ráfaga", () => {
     expect(l.inicios).toEqual([0, 0.5])
   })
 })
+
+describe("palabra por corte (karaoke)", () => {
+  const fuentes = [{ tipo: "video" as const, duracion: 20 }]
+  const tomas = Array.from({ length: 4 }, (_, i) => ({ fuente: 0, trim_start: i, duracion: 0.6 }))
+  it("una palabra por toma, del mismo largo, y marcos inclinados", () => {
+    const g = normalizarGuion({ tomas, palabras: ["armá", "tus", "cinco"] }, fuentes, [], { ritmo: "rafaga", karaoke: true })
+    expect(g.palabras).toEqual(["ARMÁ", "TUS", "CINCO", ""])
+    expect(g.inclinado).toBe(true)
+  })
+  it("con precio o palabra prohibida no se ponen palabras", () => {
+    expect(normalizarGuion({ tomas, palabras: ["solo", "$15.000"] }, fuentes, [], { ritmo: "rafaga", karaoke: true }).palabras).toBeUndefined()
+    expect(normalizarGuion({ tomas, palabras: ["últimos", "cupos"] }, fuentes, [], { ritmo: "rafaga", karaoke: true }).palabras).toBeUndefined()
+  })
+  it("sin la opción de la marca, nada", () => {
+    const g = normalizarGuion({ tomas, palabras: ["armá"] }, fuentes, [], { ritmo: "rafaga" })
+    expect(g.palabras).toBeUndefined()
+    expect(g.inclinado).toBeUndefined()
+  })
+})

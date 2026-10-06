@@ -106,9 +106,9 @@ export async function settings(db: SupabaseClient) {
 
 export async function brandContext(db: SupabaseClient, brandId: string): Promise<BrandContext> {
   const b = (await must(
-    db.from("cos_brands").select("name, slug, tone_md, rules_json, datos_vigentes").eq("id", brandId).single(),
+    db.from("cos_brands").select("name, slug, tone_md, rules_json, datos_vigentes, reel_karaoke").eq("id", brandId).single(),
     "marca",
-  )) as { name: string; slug: string; tone_md: string; rules_json: BrandContext["rules"]; datos_vigentes: unknown }
+  )) as { name: string; slug: string; tone_md: string; rules_json: BrandContext["rules"]; datos_vigentes: unknown; reel_karaoke: boolean | null }
   const vigentes = datosParaIA(normalizarDatos(b.datos_vigentes), arDay(new Date()))
   // Fichas de las referencias de estilo, por formato (cada motor usa solo la suya).
   const { data: refs } = await db
@@ -132,7 +132,7 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
   const lecciones = leccionesDeRechazos(
     (rech ?? []).map((r) => ({ reasons: r.reject_reasons ?? [], note: r.reject_note, post_type: r.post_type, caption: r.caption, overlay_text: r.overlay_text, at: r.rejected_at as string })),
   )
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones, ritmoReel }
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones, ritmoReel, karaoke: !!b.reel_karaoke }
 }
 
 type AssetRow = {

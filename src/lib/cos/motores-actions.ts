@@ -257,3 +257,11 @@ export async function pedirMusicaRecomendada() {
   await db.rpc("cos_enqueue_job", { p_type: "musica:recomendar", p_payload: { brand_id: brand.id }, p_run_at: new Date().toISOString(), p_dedupe_key: `musica:recomendar:${brand.id}:ya` })
   revalidatePath("/marca")
 }
+
+/** Palabra por corte (estilo karaoke) en los reels de la marca: prender o apagar. */
+export async function cambiarKaraoke(activo: boolean) {
+  const { brand, db } = await marcaActiva()
+  const { error } = await db.from("cos_brands").update({ reel_karaoke: activo }).eq("id", brand.id)
+  if (error) throw aviso(`No se pudo guardar: ${error.message}`)
+  revalidatePath("/marca")
+}

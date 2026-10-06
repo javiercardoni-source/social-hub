@@ -20,6 +20,8 @@ export type BrandContext = {
   lecciones?: string
   /** Ritmo de los reels de la marca, según lo MEDIDO en sus referencias (shared/cos/ritmo.ts). */
   ritmoReel?: "normal" | "rafaga"
+  /** Palabra por corte (estilo karaoke): opción de la marca (cos_brands.reel_karaoke). */
+  karaoke?: boolean
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -168,6 +170,8 @@ export function reelPrompt(input: {
   estilo?: string
   /** «rafaga»: muchas tomas cortas, cortes secos al pulso (como las plantillas de CapCut). */
   ritmo?: "normal" | "rafaga"
+  /** Palabra por corte: una palabra de una frase de la marca sobre cada toma. */
+  karaoke?: boolean
 }): string {
   const rafaga = input.ritmo === "rafaga"
   return [
@@ -198,6 +202,11 @@ export function reelPrompt(input: {
       : "- combo: vacío (no hay combos cargados).",
     input.temas.length ? `- musica: una de ${input.temas.join(" | ")}.` : "- musica: vacío (la marca no tiene música cargada).",
     "- idea: una línea, qué cuenta el reel.",
+    input.karaoke
+      ? "- palabras: PALABRA POR CORTE (estilo karaoke). Una frase corta y pegadiza de la marca, partida en palabras, UNA por toma y en el mismo orden " +
+        "(misma cantidad que tomas; si sobran tomas, repetí el remate). Que se lea completa con sentido, ej: \"ARMÁ · TUS · 5 · ONIGIRIS · COMO · QUIERAS\". " +
+        "Máximo 12 letras por palabra; sin precios ni números de más de 2 cifras. Con palabras, gancho y medio quedan vacíos (la frase cumple ese rol)."
+      : "- palabras: lista vacía.",
     "",
     "Reglas de marca (no negociables):",
     '- Nunca inventes escasez ("últimos", "hasta agotar stock", "cupos") ni precios.',

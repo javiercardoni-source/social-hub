@@ -34,10 +34,11 @@ type Props = {
   insumos: Insumo[]
   musica: Tema[]
   musicaRecomendada: MusicaRecomendadaUI | null
+  karaoke: boolean
   agenda: AgendaMarca
 }
 
-export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt, insumos, musica, musicaRecomendada, agenda }: Props) {
+export function MarcaClient({ brandName, color, modulos, brandbook, brandbookStatus, datos, datosAt, insumos, musica, musicaRecomendada, karaoke, agenda }: Props) {
   const router = useRouter()
   const firstOpen = modulos.find((m) => m.status === "in_progress") ?? modulos.find((m) => m.status === "pending") ?? modulos[0]
   const [activo, setActivo] = useState<string>(firstOpen.id)
@@ -202,7 +203,7 @@ export function MarcaClient({ brandName, color, modulos, brandbook, brandbookSta
       {vista === "agenda" ? (
         <AgendaMarcaPanel brandName={brandName} agenda={agenda} />
       ) : vista === "motores" ? (
-        <Motores brandName={brandName} insumos={insumos} musica={musica} recomendada={musicaRecomendada} />
+        <Motores brandName={brandName} insumos={insumos} musica={musica} recomendada={musicaRecomendada} karaoke={karaoke} />
       ) : vista === "datos" ? (
         <DatosVigentesForm brandName={brandName} datos={datos} actualizado={datosAt} />
       ) : vista === "chat" ? (
