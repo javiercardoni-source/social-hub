@@ -515,11 +515,14 @@ function TarjetaMedia({ t, videoRef }: { t: Tarjeta; videoRef: React.RefObject<H
   const src = srcDe(t)
   if (!src) return <div className="absolute inset-0 flex items-center justify-center text-sm text-white/40">Sin archivo</div>
   if (esVideo(t)) {
-    return <video ref={videoRef} src={src} className="absolute inset-0 h-full w-full object-contain" playsInline loop controls={false} />
+    // key={t.id}: cada tarjeta es un elemento <video> nuevo (no el mismo reutilizado con el src
+    // cambiado) — si no, al pasar de un reel a otro el navegador se queda a mitad de camino,
+    // cargando la fuente vieja sobre la nueva, y el siguiente video queda colgado.
+    return <video key={t.id} ref={videoRef} src={src} className="absolute inset-0 h-full w-full object-contain" playsInline loop controls={false} />
   }
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+    <img key={t.id} src={src} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />
   )
 }
 
