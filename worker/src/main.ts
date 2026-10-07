@@ -205,6 +205,9 @@ function agendaClock() {
   // Música: un set chico por marca, cada hora, hasta que no quede nada con la biblioteca vieja
   // (shared/cos/musica-actualizar.ts). Sin condición: si no hay nada que actualizar, no hace nada.
   void pedir("music:actualizar", {}, `music:actualizar:${hora}`)
+  // Ingredientes: controla los textos de las piezas pendientes que todavía no pasaron por el control
+  // (worker/src/ingredientes-revisar.ts). Sin condición: si no queda ninguna, no hace nada.
+  void pedir("ingredientes:revisar", {}, `ingredientes:revisar:${hora}`)
   if (hora % 3 === 0) void pedir("clima:stories", {}, `clima:stories:${hora}`)
   if (horaBA === 5) {
     void pedir("agenda:context", {}, `agenda:context:${dia}`)

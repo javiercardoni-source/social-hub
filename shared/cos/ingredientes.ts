@@ -11,6 +11,8 @@
  *   hace reintentar; si vuelve a pasar, queda un aviso para quien aprueba.
  */
 
+import { leerDiseno } from "./plantillas.ts"
+
 export type Ingredientes = { visibles: string[]; dudosos: string[] }
 
 /** Canónico → cómo puede aparecer escrito (singular; el plural se tolera solo). */
@@ -194,3 +196,28 @@ export const REGLA_INGREDIENTES_VISTA =
   "- ingredientes_dudosos: lo que podría estar pero no se distingue con seguridad. Confusiones típicas: salmón/atún/trucha, " +
   "palta/pepino/wasabi, queso crema/mayonesa, langostino/kanikama, panko/sésamo, cebolla/verdeo. Ante la duda entre dos, los dos van acá.\n" +
   "- Lo que no se ve, no está, aunque sea típico del plato. Lo que dice el empleado (una persona) sí se puede tomar como visto."
+
+/**
+ * Todos los textos de una pieza ya escrita (para controlarla después): texto, hashtags, frase sobre
+ * la imagen, los del guion del reel (gancho, medio, cierre, idea, palabra por corte) y los campos
+ * de la plantilla. Lo que no es texto se ignora.
+ */
+export function textosDePieza(
+  p: { caption?: string | null; hashtags?: string | null; overlay_text?: string | null; montaje?: unknown; diseno?: unknown },
+  marca: string,
+): string[] {
+  const str = (v: unknown) => (typeof v === "string" ? v : "")
+  const m = p.montaje && typeof p.montaje === "object" ? (p.montaje as Record<string, unknown>) : null
+  const d = leerDiseno(p.diseno, marca)
+  return [
+    str(p.caption),
+    str(p.hashtags),
+    str(p.overlay_text),
+    str(m?.gancho),
+    str(m?.medio),
+    str(m?.titulo_cierre),
+    str(m?.idea),
+    ...(Array.isArray(m?.palabras) ? (m.palabras as unknown[]).map(str) : []),
+    ...(d ? Object.values(d.campos).map(str) : []),
+  ].filter(Boolean)
+}

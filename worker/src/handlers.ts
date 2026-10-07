@@ -69,6 +69,7 @@ import { vitrinaHandlers } from "./vitrina.ts"
 import { impresionHandlers } from "./impresion.ts"
 import { pedirAvisoAprobar, pushHandlers } from "./push.ts"
 import { musicaActualizarHandlers } from "./musica-actualizar.ts"
+import { ingredientesRevisarHandlers } from "./ingredientes-revisar.ts"
 import { elegirImagen, elegirMusica, temasParaReel } from "./eleccion.ts"
 import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
 import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
@@ -2270,4 +2271,5 @@ export const handlers: Record<string, Handler> = {
   ...impresionHandlers,
   ...pushHandlers,
   ...musicaActualizarHandlers,
+  ...ingredientesRevisarHandlers,
 }

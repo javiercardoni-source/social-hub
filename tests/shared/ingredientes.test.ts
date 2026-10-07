@@ -7,6 +7,7 @@ import {
   normalizarIngrediente,
   normalizarLista,
   respaldoDe,
+  textosDePieza,
 } from "../../shared/cos/ingredientes"
 
 describe("ingredientesEn", () => {
@@ -103,5 +104,18 @@ describe("bloqueIngredientes", () => {
   })
   it("lista vacía: lo dice y no inventa", () => {
     expect(bloqueIngredientes({ visibles: [], dudosos: [] })).toContain("(ninguno con certeza)")
+  })
+})
+
+describe("textosDePieza", () => {
+  it("junta texto, hashtags, frase y los textos del guion del reel", () => {
+    const t = textosDePieza(
+      { caption: "Hola", hashtags: "#salmon", overlay_text: "PEDILO", montaje: { gancho: "ASÍ", medio: "", titulo_cierre: "YA", idea: "roll", palabras: ["UN", "ROLL", 3] } },
+      "sensaciones",
+    )
+    expect(t).toEqual(["Hola", "#salmon", "PEDILO", "ASÍ", "YA", "roll", "UN", "ROLL"])
+  })
+  it("ignora lo que no es texto o no es una plantilla válida", () => {
+    expect(textosDePieza({ caption: null, montaje: "x", diseno: { plantilla: "no_existe", campos: { titulo: "Palta" } } }, "bijutsukan")).toEqual([])
   })
 })
