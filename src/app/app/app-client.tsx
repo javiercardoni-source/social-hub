@@ -156,6 +156,12 @@ export function AppAprobar(props: {
     }, 180)
   }
 
+  /** Cerrar una hoja (motivo de rechazo / elegir hora) sin decidir nada: la tarjeta vuelve al centro. */
+  function cerrarSheet() {
+    setSheet(null)
+    resetDrag()
+  }
+
   // ── Aprobar ───────────────────────────────────────────────────────────────
   async function confirmarAprobar(t: Tarjeta, cuando: string | null | "motor") {
     if (busy) return
@@ -374,7 +380,7 @@ export function AppAprobar(props: {
 
       {/* Hoja: elegir cuándo aprobar (sin horario de agenda) */}
       {sheet === "elegirHora" && actual && (
-        <Hoja onCerrar={resetDrag}>
+        <Hoja onCerrar={cerrarSheet}>
           <p className="mb-3 text-sm text-white/70">Esta pieza no tiene un horario propuesto por la agenda.</p>
           <div className="flex flex-col gap-2">
             <button type="button" disabled={busy} onClick={() => confirmarAprobar(actual, null)} className="rounded-xl bg-emerald-500 py-3 font-semibold text-black disabled:opacity-50">
@@ -402,7 +408,7 @@ export function AppAprobar(props: {
 
       {/* Hoja: motivo de rechazo */}
       {sheet === "rechazar" && actual && (
-        <Hoja onCerrar={resetDrag}>
+        <Hoja onCerrar={cerrarSheet}>
           <div className="mb-3 flex flex-wrap gap-1.5">
             {MOTIVOS.map((m) => (
               <button
