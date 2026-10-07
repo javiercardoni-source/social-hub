@@ -65,6 +65,7 @@ import { sugerenciasHandlers } from "./sugerencias.ts"
 import { adsHandlers } from "./ads.ts"
 import { vitrinaHandlers } from "./vitrina.ts"
 import { impresionHandlers } from "./impresion.ts"
+import { pedirAvisoAprobar, pushHandlers } from "./push.ts"
 import { elegirImagen, elegirMusica, temasParaReel } from "./eleccion.ts"
 import { ensureReel, loadReelPost, planearReel, type VersionReel } from "./reel.ts"
 import { TAPA_MS, cierreDesdeDatos, type GuionReel } from "../../shared/cos/reel.ts"
@@ -888,7 +889,7 @@ const publishPost: Handler = async (job, { db, log, signal }) => {
 }
 
 // ── post:render ─────────────────────────────────────────────────────────────
-const renderPost: Handler = async (job, { db, log }) => {
+const renderPost: Handler = async (job, { db, queue, log }) => {
   const postId = idFrom(job, "post_id")
   const s = await settings(db)
   // Si lo editan mientras se arma, se vuelve a armar con lo último (nunca queda una pieza vieja).
@@ -906,6 +907,7 @@ const renderPost: Handler = async (job, { db, log }) => {
       await setPost(db, postId, { render_key: key, render_qa: { skipped: "reel" }, tapa_key: tapa })
       await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
       log("reel listo", { post: postId, key })
+      await pedirAvisoAprobar(queue).catch((e) => log("no pude pedir el aviso push", { error: String(e) }))
       return
     }
     const p = await loadRenderPost(db, postId)
@@ -927,6 +929,7 @@ const renderPost: Handler = async (job, { db, log }) => {
     // La primera vez que queda lista, el borrador pasa a verse en Aprobaciones (nunca se borra).
     await db.from("cos_posts").update({ first_render_at: new Date().toISOString() }).eq("id", postId).is("first_render_at", null)
     log("pieza final lista", { post: postId, key: r.key, layout: r.layout, qa: r.qa })
+    await pedirAvisoAprobar(queue).catch((e) => log("no pude pedir el aviso push", { error: String(e) }))
     return
   }
   throw new Error("el post cambió varias veces mientras se armaba la pieza: se reintenta")
@@ -2151,4 +2154,5 @@ export const handlers: Record<string, Handler> = {
   ...adsHandlers,
   ...vitrinaHandlers,
   ...impresionHandlers,
+  ...pushHandlers,
 }

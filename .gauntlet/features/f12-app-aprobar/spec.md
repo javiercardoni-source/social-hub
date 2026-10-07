@@ -3,7 +3,7 @@
 > Pedido de Javier (07-10-2026): "un formato app de Social Hub para que yo pueda realizar el proceso
 > de aprobación desde una app en mi móvil. Quiero eso, nada más que eso, que sea 100 % dedicada a
 > aprobación. Realizá el plan utilizando Gauntlet, loop y goal."
-> **Estado: SPEC** (esperando las 3 decisiones de Javier, al final).
+> **Estado: DESIGN → IMPLEMENT** (decisiones cerradas por Javier el 07-10, al final).
 
 ## GOAL (cuándo está terminada)
 
@@ -109,3 +109,17 @@ Cada etapa recorre: **IMPLEMENT → TEST → CRITIC → FIX → REGRESSION → V
 2. **Avisos push** cuando hay piezas nuevas para aprobar: sí / no (suma la etapa E4).
 3. **Gesto:** botones Aprobar / Rechazar abajo (recomendado, sin errores por deslizar sin querer) o
    deslizar la tarjeta (derecha aprueba, izquierda rechaza) además de los botones.
+
+## Decisiones de Javier (07-10)
+1. **Dirección:** `social.kitchcocenter.com/app`.
+2. **Avisos push:** sí (etapa E4).
+3. **Gesto tipo Tinder:** deslizar a la derecha = aprobar, a la izquierda = rechazar (los botones
+   quedan además, para quien prefiera tocar). **Cada pieza va sola** (reel, historia, post y FB por
+   separado aunque sean la misma gráfica), en su formato real: historia 9:16 a pantalla completa,
+   reel 9:16 con el texto del post legible abajo, post 4:5 con su texto. **Siempre con sonido.**
+   - Límite de iOS: ninguna página puede arrancar con sonido sola. Al abrir, un toque en "Empezar"
+     desbloquea el audio; desde ahí cada deslizamiento es un gesto del usuario y el siguiente video
+     arranca con sonido dentro de ese gesto.
+   - Rechazar deslizando abre los motivos (chips) antes de confirmar; cancelar devuelve la tarjeta.
+   - Aprobar deslizando = horario de la agenda; si la pieza no tiene horario de agenda, pregunta
+     "Ya" o "Elegir día y hora" (no aprueba a ciegas).
