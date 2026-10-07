@@ -5,7 +5,7 @@ import { plantilla } from "../../../shared/cos/plantillas"
 import { normalizarExcluidos } from "../../../shared/cos/reel"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
-import { horaHistoriaManual, primerHuecoManual, type Formato } from "../../../shared/cos/agenda"
+import { chocaConReglas, horaHistoriaManual, huecoConReglas, type Formato } from "../../../shared/cos/agenda"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -148,12 +148,25 @@ export async function editarPost(
  *   null    → apenas apruebe.
  * La fecha se fija ANTES de aprobar porque entra en el hash de lo aprobado.
  */
+/** Lo aprobado o publicado de una cuenta alrededor de una fecha (para las reglas de la agenda). */
+async function ocupadosDeCuenta(db: ReturnType<typeof createAdminClient>, accountId: string, sinPost: string, cerca: Date) {
+  const desde = new Date(cerca.getTime() - 2 * 24 * 3600_000).toISOString()
+  const { data: otros } = await db
+    .from("cos_posts")
+    .select("post_type, scheduled_at, published_at")
+    .eq("account_id", accountId)
+    .neq("id", sinPost)
+    .in("status", ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "RETRY_SCHEDULED"])
+    .or(`scheduled_at.gte.${desde},published_at.gte.${desde}`)
+  return (otros ?? []).map((o) => ({ account: accountId, format: o.post_type as Formato, at: (o.published_at ?? o.scheduled_at) as string })).filter((o) => !!o.at)
+}
+
 export async function aprobarPost(postId: string, cuando: string | null | "motor" = null, vistoAt?: string) {
   const member = await requireMember("approver")
   const db = createAdminClient()
 
   if (cuando === "motor") {
-    const { data: p } = await db.from("cos_posts").select("render_qa, scheduled_at, window_start, schedule_source, schedule_lock").eq("id", postId).single()
+    const { data: p } = await db.from("cos_posts").select("render_qa, scheduled_at, window_start, schedule_source, schedule_lock, account_id, post_type, brand_id").eq("id", postId).single()
     if (!p?.render_qa) throw aviso("La pieza final todavía se está armando y revisando. Esperá unos segundos y recargá.")
     if (!p.scheduled_at || !p.window_start || p.schedule_lock || !["motor", "exploracion", "fijo"].includes(p.schedule_source ?? "")) {
       throw aviso("Este post no tiene horario de la agenda: elegí «Apenas apruebe» u «Otro horario».")
@@ -162,6 +175,14 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
     // Se aprueba la hora que se vio: si la agenda la cambió mientras tanto, se avisa.
     if (!vistoAt || new Date(vistoAt).getTime() !== new Date(p.scheduled_at).getTime()) {
       throw aviso("La agenda acaba de cambiar el horario de este post: recargá la página para ver el nuevo antes de aprobar.")
+    }
+    // La hora de la agenda puede haber quedado vieja (otra pieza ya aprobada tomó ese lugar): se
+    // verifica contra lo aprobado de la cuenta con las mismas reglas; si choca, la agenda recalcula.
+    const ocupadosMotor = await ocupadosDeCuenta(db, p.account_id, postId, new Date(p.scheduled_at))
+    const choque = chocaConReglas({ account: p.account_id, format: p.post_type as Formato }, new Date(p.scheduled_at), ocupadosMotor)
+    if (choque) {
+      await db.rpc("cos_enqueue_job", { p_type: "agenda:plan", p_payload: { brand_id: p.brand_id }, p_run_at: new Date(Date.now() - 3600_000).toISOString(), p_dedupe_key: `agenda:plan:${p.brand_id}:aprobar:${Math.floor(Date.now() / 60_000)}` })
+      throw aviso(`Ese horario ya no sirve (${choque}): la agenda lo está recalculando. Recargá en un minuto y aprobá con la hora nueva.`)
     }
     await sellarYProgramar(db, postId, member.userId, p.scheduled_at)
     revalidatePath("/aprobaciones")
@@ -181,17 +202,7 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
   const pedido = target && target.getTime() > Date.now() + 2 * 60_000 ? target : new Date(Date.now() + 2 * 60_000)
   // Freno anti-ráfaga: la misma cuenta no publica dos piezas más cerca de lo que pide la agenda.
   const { data: yo } = await db.from("cos_posts").select("account_id, post_type").eq("id", postId).single()
-  const desde = new Date(pedido.getTime() - 24 * 3600_000).toISOString()
-  const { data: otros } = await db
-    .from("cos_posts")
-    .select("post_type, scheduled_at, published_at")
-    .eq("account_id", yo?.account_id ?? "")
-    .neq("id", postId)
-    .in("status", ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "RETRY_SCHEDULED"])
-    .or(`scheduled_at.gte.${desde},published_at.gte.${desde}`)
-  const ocupados = (otros ?? [])
-    .map((o) => ({ account: yo?.account_id ?? "", format: o.post_type as Formato, at: (o.published_at ?? o.scheduled_at) as string }))
-    .filter((o) => !!o.at)
+  const ocupados = await ocupadosDeCuenta(db, yo?.account_id ?? "", postId, pedido)
   // Historia de una subida: si cae pegada a su reel/post de Instagram (misma cuenta y archivo), va 90 min después.
   let deseado = pedido
   if (yo?.post_type === "story") {
@@ -208,7 +219,8 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
       deseado = horaHistoriaManual(pedido, (hermanos ?? []).filter((h) => h.scheduled_at).map((h) => new Date(h.scheduled_at as string))).at
     }
   }
-  const hueco = primerHuecoManual({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, deseado, ocupados)
+  // Respeta el máximo por día y el horario (9 a 22); una hora elegida puntualmente se respeta si no choca.
+  const hueco = huecoConReglas({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, deseado, ocupados, { horaElegida: !!target && target.getTime() > Date.now() + 2 * 60_000 })
   const historiaCorrida = deseado.getTime() !== pedido.getTime()
   const publishNow = !hueco.corrido && !historiaCorrida && (!target || target.getTime() <= Date.now() + 2 * 60_000)
   const horaFinal = hueco.at

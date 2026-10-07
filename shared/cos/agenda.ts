@@ -291,6 +291,53 @@ export function primerHuecoManual(p: { account: string; format: Formato }, desea
   return { at: new Date(t), corrido: t !== deseado.getTime() }
 }
 
+/**
+ * ¿Choca esta hora con lo ya aprobado de la misma cuenta? Mismas reglas que la agenda: separación
+ * (4 h entre posts/reels, 90 min entre historias) y máximo por día (1 post/reel, 5 historias).
+ * Devuelve el motivo o null. (07-10-2026: aprobar «en el horario de la agenda» no lo verificaba y
+ * salieron 3 reels de Bijutsukan juntos a las 19:00.)
+ */
+export function chocaConReglas(p: { account: string; format: Formato }, at: Date, ocupados: Ocupado[]): string | null {
+  const lim = LIMITES[tipo(p.format)]
+  const mismos = ocupados.filter((o) => o.account === p.account && tipo(o.format) === tipo(p.format))
+  const dia = enBA(at).dia
+  if (mismos.filter((o) => enBA(new Date(o.at)).dia === dia).length >= lim.porDia) return `ya hay ${lim.porDia === 1 ? "un post" : `${lim.porDia} historias`} ese día`
+  if (mismos.some((o) => Math.abs(Date.parse(o.at) - at.getTime()) < lim.separacionMin * 60_000)) return "muy cerca de otra pieza de la cuenta"
+  return null
+}
+
+/**
+ * Hora final de algo aprobado a mano: la pedida si cumple las reglas de la cuenta; si no, el primer
+ * hueco hacia adelante que las cumpla, DENTRO del horario (9 a 22). `horaElegida` = Javier eligió esa
+ * hora puntual: se respeta aunque esté fuera de horario, siempre que no choque.
+ * (07-10-2026: el freno viejo solo separaba de a 4 h y apiló 148 piezas de FasutoFudo día y noche.)
+ */
+export function huecoConReglas(
+  p: { account: string; format: Formato },
+  deseado: Date,
+  ocupados: Ocupado[],
+  opts: { horaElegida?: boolean; horaMin?: number; horaMax?: number } = {},
+): { at: Date; corrido: boolean } {
+  const horaMin = (opts.horaMin ?? 9) * 60
+  const horaMax = (opts.horaMax ?? 22) * 60
+  const enHorario = (t: Date) => {
+    const m = enBA(t).min
+    return m >= horaMin && m <= horaMax
+  }
+  if (!chocaConReglas(p, deseado, ocupados) && (opts.horaElegida || enHorario(deseado))) return { at: deseado, corrido: false }
+  // Barrido de a 15 min (redondeado), saltando la noche, hasta 120 días.
+  let t = new Date(Math.ceil(deseado.getTime() / (15 * 60_000)) * 15 * 60_000)
+  const fin = deseado.getTime() + 120 * DIA
+  while (t.getTime() <= fin) {
+    const { dia, min } = enBA(t)
+    if (min < horaMin) t = deBA(dia, horaMin)
+    else if (min > horaMax) t = deBA(sumarDias(dia, 1), horaMin)
+    else if (!chocaConReglas(p, t, ocupados)) return { at: t, corrido: true }
+    else t = new Date(t.getTime() + 15 * 60_000)
+  }
+  return { at: t, corrido: true }
+}
+
 /** Semilla estable por pieza (para que la exploración no cambie en cada corrida). */
 function semilla(id: string): number {
   let h = 2166136261

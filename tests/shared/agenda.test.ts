@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  huecoConReglas,
+  chocaConReglas,
   abreEseDia,
   asignar,
   cabe,
@@ -344,5 +346,31 @@ describe("la historia de una subida va después de su reel (decisión de Javier,
     expect(horaHistoriaManual(reel, [reel])).toEqual({ at: new Date(reel.getTime() + 90 * 60_000), corrida: true })
     const lejos = ar(dia(5), 20)
     expect(horaHistoriaManual(lejos, [reel])).toEqual({ at: lejos, corrida: false })
+  })
+})
+
+describe("aprobar a mano respeta las reglas de la cuenta (07-10-2026)", () => {
+  const cta = "c1"
+  const at = (iso: string) => new Date(iso)
+  it("varias aprobadas «apenas apruebe» de madrugada no salen de noche ni dos por día", () => {
+    const ocupados: { account: string; format: "reel"; at: string }[] = []
+    const dias = new Set<string>()
+    for (let i = 0; i < 5; i++) {
+      const h = huecoConReglas({ account: cta, format: "reel" }, at("2026-10-07T05:00:00Z"), ocupados) // 02:00 BA
+      const { dia, min } = enBA(h.at)
+      expect(min >= 9 * 60 && min <= 22 * 60).toBe(true)
+      expect(dias.has(dia)).toBe(false)
+      dias.add(dia)
+      ocupados.push({ account: cta, format: "reel", at: h.at.toISOString() })
+    }
+  })
+  it("una hora elegida puntualmente se respeta si no choca", () => {
+    const h = huecoConReglas({ account: cta, format: "story" }, at("2026-10-08T02:30:00Z"), [], { horaElegida: true })
+    expect(h).toEqual({ at: at("2026-10-08T02:30:00Z"), corrido: false })
+  })
+  it("detecta el choque de la hora de la agenda con otra ya aprobada", () => {
+    const ocupados = [{ account: cta, format: "reel" as const, at: "2026-10-06T22:00:00Z" }]
+    expect(chocaConReglas({ account: cta, format: "reel" }, at("2026-10-06T22:00:00Z"), ocupados)).toMatch(/un post|cerca/)
+    expect(chocaConReglas({ account: cta, format: "story" }, at("2026-10-06T22:00:00Z"), ocupados)).toBeNull()
   })
 })

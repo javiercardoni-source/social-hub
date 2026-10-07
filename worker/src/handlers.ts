@@ -625,7 +625,9 @@ const buildReel: Handler = async (job, ctx) => {
 /** Si la marca tiene la agenda prendida, le pide al motor que ubique lo nuevo (en unos segundos). */
 async function pedirAgenda(db: SupabaseClient, queue: Queue, brandId: string) {
   const { data } = await db.from("cos_brands").select("agenda_auto").eq("id", brandId).single()
-  if (data?.agenda_auto) await queue.enqueue("agenda:plan", { brand_id: brandId }, { runAt: new Date(Date.now() + 20_000), dedupeKey: `agenda:plan:${brandId}:${Math.floor(Date.now() / 300_000)}` })
+  // Adelante en la cola (run_at en el pasado): la agenda tarda un segundo y no puede esperar horas
+  // detrás de los armados de video (06-10: corrió con 2 h de atraso y aprobaron horas viejas).
+  if (data?.agenda_auto) await queue.enqueue("agenda:plan", { brand_id: brandId }, { runAt: new Date(Date.now() - 3600_000), dedupeKey: `agenda:plan:${brandId}:${Math.floor(Date.now() / 300_000)}` })
 }
 
 // ── biblioteca de música (cos-media/music/<marca>/, la carga scripts/musica-subir.mjs) ──

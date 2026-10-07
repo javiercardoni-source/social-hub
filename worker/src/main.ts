@@ -198,9 +198,10 @@ function agendaClock() {
   const horaBA = new Date(ahora - 3 * 3600_000).getUTCHours()
   const hora = Math.floor(ahora / 3600_000)
   const dia = Math.floor((ahora - 3 * 3600_000) / 86_400_000)
-  const pedir = (tipo: string, payload: Record<string, unknown>, clave: string) =>
-    queue.enqueue(tipo, payload, { dedupeKey: clave }).catch((e) => log(`no pude encolar ${tipo}`, { error: String(e) }))
-  void pedir("agenda:plan", { agente: horaBA === 7 }, `agenda:plan:${hora}`)
+  const pedir = (tipo: string, payload: Record<string, unknown>, clave: string, runAt?: Date) =>
+    queue.enqueue(tipo, payload, { dedupeKey: clave, runAt }).catch((e) => log(`no pude encolar ${tipo}`, { error: String(e) }))
+  // La agenda va adelante en la cola: si espera detrás de los videos, propone horas viejas.
+  void pedir("agenda:plan", { agente: horaBA === 7 }, `agenda:plan:${hora}`, new Date(ahora - 3600_000))
   if (hora % 3 === 0) void pedir("clima:stories", {}, `clima:stories:${hora}`)
   if (horaBA === 5) {
     void pedir("agenda:context", {}, `agenda:context:${dia}`)
