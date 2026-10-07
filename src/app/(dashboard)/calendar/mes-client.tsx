@@ -87,7 +87,7 @@ export function MesClient(props: { mes: string; hoy: string; dias: DiaUI[]; marc
 
       {/* Ritmo de la marca: la agenda llena semana por semana con esto */}
       {ritmo && (
-        <Card className="flex flex-wrap items-center gap-3 p-3 text-sm">
+        <div className="flex flex-row flex-wrap items-center gap-3 rounded-xl border bg-card p-3 text-sm">
           <b>Ritmo de {props.marca}</b>
           <label className="flex items-center gap-1.5">
             <select className="rounded-md border bg-background px-2 py-1" value={ritmo.postsSemana} onChange={(e) => setRitmo({ ...ritmo, postsSemana: Number(e.target.value) })}>
@@ -135,7 +135,7 @@ export function MesClient(props: { mes: string; hoy: string; dias: DiaUI[]; marc
               {props.sinHora} pieza{props.sinHora > 1 ? "s" : ""} pendiente{props.sinHora > 1 ? "s" : ""} sin lugar en los próximos 90 días con este ritmo: aprobá las mejores y rechazá el resto, o subí el ritmo.
             </span>
           )}
-        </Card>
+        </div>
       )}
 
       {/* Grilla del mes */}
@@ -162,7 +162,7 @@ export function MesClient(props: { mes: string; hoy: string; dias: DiaUI[]; marc
                   {d.piezas.length > 0 && <span className="text-[10px] text-muted-foreground">{d.piezas.length}</span>}
                 </div>
                 {d.campanias.map((c) => (
-                  <span key={c.id} className="truncate rounded px-1 text-[10px] font-semibold text-white" style={{ backgroundColor: c.color }} title={c.nombre}>
+                  <span key={c.id} className="block h-4 truncate rounded px-1 text-[10px] font-semibold leading-4 text-white" style={{ backgroundColor: c.color }} title={c.nombre}>
                     {c.inicia ? c.nombre : " "}
                   </span>
                 ))}
