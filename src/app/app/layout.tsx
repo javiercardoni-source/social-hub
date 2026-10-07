@@ -19,6 +19,10 @@ export const metadata: Metadata = {
   manifest: "/app/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Aprobar" },
   icons: { icon: "/icon", apple: "/apple-icon" },
+  // `appleWebApp.capable` de Next 16.3.7 emite "mobile-web-app-capable" (el genérico), no el
+  // específico de Apple — y iOS todavía lo pide para abrir en pantalla completa sin la barra de
+  // Safari. Se agrega a mano para no depender de que Next lo arregle.
+  other: { "apple-mobile-web-app-capable": "yes" },
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
