@@ -70,7 +70,7 @@ export function AppAprobar(props: {
   vapidKey: string | null
 }) {
   const router = useRouter()
-  const [, startMarca] = useTransition()
+  const [pendienteMarca, startMarca] = useTransition()
   const [started, setStarted] = useState(false)
   const [cola, setCola] = useState(props.tarjetas)
   const totalInicial = props.tarjetas.length
@@ -327,9 +327,10 @@ export function AppAprobar(props: {
       {/* Barra de arriba: los chips de marca se deslizan en su propia franja; el contador y la
           campana de avisos quedan siempre a la vista (si no, con marcas largas se iban de pantalla). */}
       <header className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+        <div className={cn("flex min-w-0 flex-1 items-center gap-2 overflow-x-auto", pendienteMarca && "opacity-50")}>
           <button
             type="button"
+            disabled={pendienteMarca}
             onClick={() => cambiarMarca("")}
             className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", !props.marcaActual ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
           >
@@ -339,6 +340,7 @@ export function AppAprobar(props: {
             <button
               key={m.slug}
               type="button"
+              disabled={pendienteMarca}
               onClick={() => cambiarMarca(m.slug)}
               className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", props.marcaActual === m.slug ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
             >
@@ -346,7 +348,8 @@ export function AppAprobar(props: {
             </button>
           ))}
         </div>
-        <span className="shrink-0 text-xs font-semibold tabular-nums text-white/70">
+        <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold tabular-nums text-white/70">
+          {pendienteMarca && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {cola.length > 0 ? `${totalInicial - cola.length + 1} / ${totalInicial}` : `${totalInicial} / ${totalInicial}`}
         </span>
         <button
