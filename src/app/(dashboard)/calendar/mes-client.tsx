@@ -1,14 +1,11 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react"
 import { Card } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { PlatformIcon } from "@/components/ui/platform-icon"
-import { guardarRitmo } from "@/lib/cos/campanias-actions"
-import { explicarError } from "@/lib/ui-errors"
+import { RitmoMarca } from "./ritmo-marca"
 import { cn } from "@/lib/utils"
 
 export type PiezaDia = {
@@ -48,11 +45,7 @@ const moverMes = (mes: string, n: number) => {
 }
 
 export function MesClient(props: { mes: string; hoy: string; dias: DiaUI[]; marca: string | null; ritmo: { postsSemana: number; historiasDia: number } | null; sinHora: number }) {
-  const router = useRouter()
-  const [pending, start] = useTransition()
-  const [msg, setMsg] = useState<string | null>(null)
   const [elegido, setElegido] = useState<string | null>(() => props.dias.find((d) => d.dia === props.hoy)?.dia ?? null)
-  const [ritmo, setRitmo] = useState(props.ritmo)
   const dia = props.dias.find((d) => d.dia === elegido)
   const mesHoy = props.hoy.slice(0, 7)
   const cuenta = (e: PiezaDia["estado"]) => props.dias.filter((d) => d.delMes).reduce((n, d) => n + d.piezas.filter((p) => p.estado === e).length, 0)
@@ -86,57 +79,7 @@ export function MesClient(props: { mes: string; hoy: string; dias: DiaUI[]; marc
       </div>
 
       {/* Ritmo de la marca: la agenda llena semana por semana con esto */}
-      {ritmo && (
-        <div className="flex flex-row flex-wrap items-center gap-3 rounded-xl border bg-card p-3 text-sm">
-          <b>Ritmo de {props.marca}</b>
-          <label className="flex items-center gap-1.5">
-            <select className="rounded-md border bg-background px-2 py-1" value={ritmo.postsSemana} onChange={(e) => setRitmo({ ...ritmo, postsSemana: Number(e.target.value) })}>
-              {[2, 3, 4, 5, 6, 7, 10, 14].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-            posts o reels por semana
-          </label>
-          <label className="flex items-center gap-1.5">
-            <select className="rounded-md border bg-background px-2 py-1" value={ritmo.historiasDia} onChange={(e) => setRitmo({ ...ritmo, historiasDia: Number(e.target.value) })}>
-              {[1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-            historias por día
-          </label>
-          <span className="text-xs text-muted-foreground">por cuenta (Instagram y Facebook cada una), de 9 a 22</span>
-          {(ritmo.postsSemana !== props.ritmo?.postsSemana || ritmo.historiasDia !== props.ritmo?.historiasDia) && (
-            <Button
-              size="sm"
-              disabled={pending}
-              onClick={() =>
-                start(async () => {
-                  try {
-                    await guardarRitmo(ritmo.postsSemana, ritmo.historiasDia)
-                    setMsg("Guardado: la agenda está reacomodando lo pendiente")
-                    setTimeout(() => router.refresh(), 4000)
-                  } catch (e) {
-                    setMsg(explicarError(e))
-                  }
-                })
-              }
-            >
-              {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Guardar y reacomodar
-            </Button>
-          )}
-          {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
-          {props.sinHora > 0 && (
-            <span className="w-full text-xs text-amber-700">
-              {props.sinHora} pieza{props.sinHora > 1 ? "s" : ""} pendiente{props.sinHora > 1 ? "s" : ""} sin lugar en los próximos 90 días con este ritmo: aprobá las mejores y rechazá el resto, o subí el ritmo.
-            </span>
-          )}
-        </div>
-      )}
+      {props.ritmo && props.marca && <RitmoMarca marca={props.marca} ritmo={props.ritmo} sinHora={props.sinHora} />}
 
       {/* Grilla del mes */}
       <div className="overflow-x-auto">

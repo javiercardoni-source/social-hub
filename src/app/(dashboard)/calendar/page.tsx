@@ -89,6 +89,9 @@ export default async function CalendarioPage({ searchParams }: { searchParams: P
   return (
     <>
       <PageHeader title="Calendario" description="La agenda mira 3 meses: lo que propone, lo aprobado y lo publicado, con las campañas de cada época">
+        <a href="/calendario" target="_blank" rel="noreferrer" className="rounded-full border px-3 py-1 text-sm font-semibold hover:bg-muted" title="El calendario solo, a pantalla completa, con vistas de día, semana y mes">
+          Abrir en pestaña aparte ↗
+        </a>
         <Vistas actual="mes" />
       </PageHeader>
       <div className="p-4 md:p-6">
