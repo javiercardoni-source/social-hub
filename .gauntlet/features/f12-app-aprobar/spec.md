@@ -3,7 +3,7 @@
 > Pedido de Javier (07-10-2026): "un formato app de Social Hub para que yo pueda realizar el proceso
 > de aprobación desde una app en mi móvil. Quiero eso, nada más que eso, que sea 100 % dedicada a
 > aprobación. Realizá el plan utilizando Gauntlet, loop y goal."
-> **Estado: DESIGN → IMPLEMENT** (decisiones cerradas por Javier el 07-10, al final).
+> **Estado: TEST, en producción** (E1-E4 implementadas; críticos propios con hallazgos 60-62 en findings.md, corregidos; falta la prueba final de Javier en su iPhone — ver GOAL).
 
 ## GOAL (cuándo está terminada)
 
@@ -123,3 +123,12 @@ Cada etapa recorre: **IMPLEMENT → TEST → CRITIC → FIX → REGRESSION → V
    - Rechazar deslizando abre los motivos (chips) antes de confirmar; cancelar devuelve la tarjeta.
    - Aprobar deslizando = horario de la agenda; si la pieza no tiene horario de agenda, pregunta
      "Ya" o "Elegir día y hora" (no aprueba a ciegas).
+
+## Nota de proceso (07-10)
+El repaso de "UX Critic (celular)" de esta ronda se hizo directo (Playwright, perfil iPhone 15,
+contra producción, sesión real) en vez de delegarlo a un subagente aparte — el entorno de esta
+sesión no tenía el Agent tool disponible para F12. Encontró 3 problemas reales (hallazgos 60-62 en
+`findings.md`), los 3 se arreglaron y se volvieron a probar en vivo. Lo que un crítico independiente
+sí agrega y acá falta: una mirada fresca sin el sesgo de quien escribió el código, y la prueba real
+de audio/push en un iPhone físico (fuera del alcance de Playwright). La prueba final de Javier cubre
+ambas cosas.
