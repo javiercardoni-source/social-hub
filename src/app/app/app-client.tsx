@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { AlertTriangle, Bell, BellOff, Check, Loader2, Volume2, X } from "lucide-react"
+import { AlertTriangle, Bell, BellOff, Check, HelpCircle, Loader2, Volume2, X } from "lucide-react"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { aprobarPost, rechazarPost, volverAAprobacion } from "@/lib/cos/actions"
 import { elegirMarca } from "@/lib/cos/brand-actions"
@@ -79,7 +79,7 @@ export function AppAprobar(props: {
   // Posición de arrastre de la tarjeta de arriba (gesto tipo Tinder).
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
-  const [volando, setVolando] = useState<"left" | "right" | null>(null)
+  const [volando, setVolando] = useState<"left" | "right" | "down" | null>(null)
   const [busy, setBusy] = useState(false)
   const startRef = useRef({ x: 0, y: 0 })
 
@@ -95,6 +95,21 @@ export function AppAprobar(props: {
   const [pushEstado, setPushEstado] = useState<"inactivo" | "activando" | "activo" | "denegado" | "no-disponible">("inactivo")
 
   const videoRef = useRef<HTMLVideoElement>(null)
+
+  // `cola` es local (para poder sacar tarjetas sin esperar al servidor); hay que resincronizarla
+  // cuando el servidor manda datos nuevos de verdad (cambio de marca, o la fijada de abajo cuando
+  // terminan de armarse piezas) — si no, cambiar de marca no movía nada de lo que se veía.
+  useEffect(() => {
+    setCola(props.tarjetas)
+    setPos({ x: 0, y: 0 })
+    setDragging(false)
+    setVolando(null)
+    setSheet(null)
+    setMotivos([])
+    setNota("")
+    setTambienResto(false)
+    setFechaElegida("")
+  }, [props.tarjetas])
 
   // La app se queda vacía: si hay piezas armándose, se fija sola cada 20 s (igual que la web).
   useEffect(() => {
@@ -152,6 +167,20 @@ export function AppAprobar(props: {
     setVolando(dir)
     setTimeout(() => {
       quitarDeCola(id)
+      setVolando(null)
+    }, 180)
+  }
+
+  /**
+   * "No sé": ni aprueba ni rechaza — manda la tarjeta al final de la cola para decidirla después,
+   * sin tocar el servidor (sigue esperando aprobación como estaba). Pedido de Javier (07-10).
+   */
+  function omitir() {
+    if (busy || sheet || volando) return
+    setVolando("down")
+    setTimeout(() => {
+      setCola((c) => (c.length > 1 ? [...c.slice(1), c[0]] : c))
+      resetDrag()
       setVolando(null)
     }, 180)
   }
@@ -284,6 +313,7 @@ export function AppAprobar(props: {
 
   const rotacion = pos.x / 18
   const estiloTarjeta = useMemo(() => {
+    if (volando === "down") return { transform: "translate(0px, 500px) rotate(0deg) scale(0.9)", transition: "transform 180ms ease-in", opacity: 0.3 }
     if (volando) return { transform: `translate(${volando === "right" ? 650 : -650}px, ${pos.y}px) rotate(${volando === "right" ? 25 : -25}deg)`, transition: "transform 180ms ease-in", opacity: 0.4 }
     if (dragging) return { transform: `translate(${pos.x}px, ${pos.y}px) rotate(${rotacion}deg)`, transition: "none" }
     if (sheet) return { transform: `translate(${pos.x || (sheet === "rechazar" ? -160 : 0)}px, 0px) rotate(${pos.x ? rotacion : sheet === "rechazar" ? -8 : 0}deg)`, transition: "transform 200ms ease-out" }
@@ -368,9 +398,12 @@ export function AppAprobar(props: {
 
       {/* Botones (además del gesto, para quien prefiera tocar) */}
       {actual && !sheet && (
-        <div className="flex shrink-0 items-center justify-center gap-10 pb-4 pt-1">
+        <div className="flex shrink-0 items-center justify-center gap-6 pb-4 pt-1">
           <button type="button" disabled={busy} aria-label="Rechazar" onClick={() => setSheet("rechazar")} className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-red-400 text-red-400 disabled:opacity-40">
             <X className="h-8 w-8" />
+          </button>
+          <button type="button" disabled={busy || cola.length <= 1} aria-label="No sé: la dejo para después" title="La dejo para después, sin decidir" onClick={omitir} className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-white/30 text-white/50 disabled:opacity-30">
+            <HelpCircle className="h-5 w-5" />
           </button>
           <button type="button" disabled={busy} aria-label="Aprobar" onClick={() => pedirAprobar(actual)} className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-emerald-400 text-emerald-400 disabled:opacity-40">
             <Check className="h-8 w-8" />
