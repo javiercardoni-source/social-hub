@@ -202,6 +202,9 @@ function agendaClock() {
     queue.enqueue(tipo, payload, { dedupeKey: clave, runAt }).catch((e) => log(`no pude encolar ${tipo}`, { error: String(e) }))
   // La agenda va adelante en la cola: si espera detrás de los videos, propone horas viejas.
   void pedir("agenda:plan", { agente: horaBA === 7 }, `agenda:plan:${hora}`, new Date(ahora - 3600_000))
+  // Música: un set chico por marca, cada hora, hasta que no quede nada con la biblioteca vieja
+  // (shared/cos/musica-actualizar.ts). Sin condición: si no hay nada que actualizar, no hace nada.
+  void pedir("music:actualizar", {}, `music:actualizar:${hora}`)
   if (hora % 3 === 0) void pedir("clima:stories", {}, `clima:stories:${hora}`)
   if (horaBA === 5) {
     void pedir("agenda:context", {}, `agenda:context:${dia}`)
