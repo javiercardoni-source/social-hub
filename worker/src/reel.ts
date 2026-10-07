@@ -21,7 +21,9 @@ import { storageFor, supabaseStorage } from "./storage.ts"
 import { probe, sceneCuts, withTmp, writeTmp } from "./media.ts"
 import { KITS, kitDeMarca, type KitMarca } from "./overlay.ts"
 import { exists, loadKit } from "./render.ts"
-import { planReel, type BloqueFuente } from "./ai.ts"
+import { controlarIngredientes, correccion, planReel, type BloqueFuente } from "./ai.ts"
+import { asegurarIngredientes } from "./ingredientes.ts"
+import { avisoIngrediente, type Ingredientes } from "../../shared/cos/ingredientes.ts"
 import { CIERRE, FUNDIDO, CORTE, firmaReel, guionPorDefecto, lineaDeTiempo, normalizarExcluidos, normalizarGuion, type Fuente, type GuionReel } from "../../shared/cos/reel.ts"
 import { ajustarAlPulso } from "../../shared/cos/ritmo.ts"
 import type { BrandContext } from "../../shared/cos/prompts.ts"
@@ -68,7 +70,8 @@ export async function fuentesParaGuion(db: SupabaseClient, versiones: VersionRee
       if (info.mediaType === "photo") {
         fuentes.push({ tipo: "foto", duracion: null, cortes: [] })
         const out = join(dir, "p.jpg")
-        await ff(["-i", f, "-frames:v", "1", "-update", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "4", out])
+        // 1024 px: a 512 la IA del guion confundía ingredientes (y de acá sale también la mirada de ingredientes).
+        await ff(["-i", f, "-frames:v", "1", "-update", "1", "-vf", "scale='min(1024,iw)':-2", "-q:v", "3", out])
         bloques.push({ tipo: "texto", texto: `Fuente ${i} · foto` }, { tipo: "imagen", jpg: await readFile(out) })
         return
       }
@@ -94,7 +97,7 @@ export async function fuentesParaGuion(db: SupabaseClient, versiones: VersionRee
       for (const [k, t] of elegidas.entries()) {
         const seg = (t.ini + t.fin) / 2
         const out = join(dir, `v${k}.jpg`)
-        await ff(["-ss", seg.toFixed(2), "-i", f, "-frames:v", "1", "-update", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "4", out])
+        await ff(["-ss", seg.toFixed(2), "-i", f, "-frames:v", "1", "-update", "1", "-vf", "scale='min(768,iw)':-2", "-q:v", "4", out])
         bloques.push({ tipo: "texto", texto: `Fuente ${i}, segundo ${seg.toFixed(1)}:` }, { tipo: "imagen", jpg: await readFile(out) })
       }
     })
@@ -118,13 +121,55 @@ export async function planearReel(opts: {
   anterior?: { gancho: string; idea: string }
   assetId?: string
   postId?: string
+  /**
+   * El asset principal: sus listas de ingredientes (ai_json) o, si no las tiene, se miran acá con los
+   * cuadros de las fuentes. `descripcionPorIA` = la descripción no la escribió una persona (archivo).
+   */
+  asset?: { id: string; aiJson: unknown; descripcion: string | null; descripcionPorIA?: boolean }
   log: (msg: string, extra?: Record<string, unknown>) => void
-}): Promise<{ guion: GuionReel; fuentes: FuenteMedida[]; respaldo: boolean }> {
+}): Promise<{ guion: GuionReel; fuentes: FuenteMedida[]; respaldo: boolean; ingredientes: Ingredientes | null; avisos: string[] }> {
   const { fuentes, bloques } = await fuentesParaGuion(opts.db, opts.versiones)
+  const cuadros = bloques.flatMap((b) => (b.tipo === "imagen" ? [b.jpg] : []))
+  const ingredientes = opts.asset
+    ? await asegurarIngredientes(opts.db, {
+        model: opts.model,
+        assetId: opts.asset.id,
+        aiJson: opts.asset.aiJson,
+        frames: async () => cuadros,
+        dicho: opts.asset.descripcionPorIA ? null : opts.asset.descripcion,
+        provisoria: opts.asset.descripcionPorIA,
+        log: opts.log,
+      })
+    : null
+  const respaldoIng = { ingredientes, dichoPorPersona: opts.asset?.descripcionPorIA ? null : (opts.asset?.descripcion ?? null), combos: opts.combos }
+  const textosDe = (g: GuionReel) => [g.gancho, g.medio, g.titulo_cierre, g.idea, ...(g.palabras ?? [])]
   try {
-    const raw = await planReel({ db: opts.db, model: opts.model, brand: opts.brand, bloques, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, assetId: opts.assetId, postId: opts.postId })
     const ritmo = opts.brand.ritmoReel ?? "normal"
-    const guion = normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas, ritmo, karaoke: !!opts.brand.karaoke })
+    const pedir = async (fix?: string) => {
+      const raw = await planReel({
+        db: opts.db,
+        model: opts.model,
+        brand: opts.brand,
+        bloques,
+        temas: opts.temas,
+        combos: opts.combos,
+        pedido: [opts.pedido, fix].filter(Boolean).join("\n") || undefined,
+        anterior: opts.anterior,
+        assetId: opts.assetId,
+        postId: opts.postId,
+        ingredientes,
+      })
+      return normalizarGuion(raw, fuentes, opts.temas, { combos: opts.combos, prohibidas: opts.prohibidas, ritmo, karaoke: !!opts.brand.karaoke })
+    }
+    let guion = await pedir()
+    // Control de ingredientes en los textos del reel (sobre todo la palabra por corte, que se lee grande).
+    let malos = controlarIngredientes(textosDe(guion), respaldoIng)
+    if (malos.length) {
+      opts.log("el guion nombró ingredientes que no se ven: se pide de nuevo", { malos })
+      guion = await pedir(correccion(malos))
+      malos = controlarIngredientes(textosDe(guion), respaldoIng)
+    }
+    const avisos = malos.map(avisoIngrediente)
     // Con palabra por corte, la frase cumple el rol del gancho y del texto del medio.
     if (guion.palabras?.length) guion.medio = ""
     if (ritmo === "rafaga" && guion.musica) {
@@ -139,13 +184,13 @@ export async function planearReel(opts: {
         })
       }
     }
-    if (guion.tomas.length >= 2) return { guion, fuentes, respaldo: false }
+    if (guion.tomas.length >= 2) return { guion, fuentes, respaldo: false, ingredientes, avisos }
     opts.log("el guion de la IA no dejó tomas usables: va el de respaldo", { tomas: guion.tomas.length })
   } catch (e) {
     // Sin API key o IA caída de forma permanente: el respaldo igual arma el reel.
     opts.log("la IA no armó el guion: va el de respaldo", { error: String(e).slice(0, 300) })
   }
-  return { guion: guionPorDefecto(fuentes, opts.temas), fuentes, respaldo: true }
+  return { guion: guionPorDefecto(fuentes, opts.temas), fuentes, respaldo: true, ingredientes, avisos: [] }
 }
 
 // ── Armado ─────────────────────────────────────────────────────────────────
@@ -195,8 +240,18 @@ const placaCierre = (g: GuionReel, kit: KitMarca) => {
 
 /** Arma el reel: tomas con movimiento, textos, cierre, unión con fundidos y música. */
 export async function armarReel(opts: { guion: GuionReel; gancho: string; archivos: { tipo: "foto" | "video"; archivo: string }[]; kit: KitMarca; musica: string | null; dir: string }): Promise<{ archivo: string; total: number }> {
-  const { guion: g, kit, dir, archivos } = opts
+  const { guion: g, kit, dir, archivos: originales } = opts
   if (!g.tomas.length) throw new PermanentError("el guion no tiene tomas")
+  // 0) Las fotos se achican UNA vez al tamaño que usa el movimiento. Antes cada cuadro volvía a
+  //    decodificar y escalar el original: con las fotos de fotógrafo (6000×4000, 12 MB) una toma
+  //    de 1 s tardaba más de 5 min en el servidor y el render moría por timeout (07-10-2026).
+  const archivos = [...originales]
+  for (const [i, f] of originales.entries()) {
+    if (f.tipo !== "foto" || !g.tomas.some((t) => t.fuente === i)) continue
+    const out = join(dir, `pre${i}.jpg`)
+    await ff(["-i", f.archivo, "-frames:v", "1", "-update", "1", "-vf", "scale=1350:2400:force_original_aspect_ratio=increase", "-q:v", "2", out])
+    archivos[i] = { ...f, archivo: out }
+  }
   // 1) Cada toma a un clip 1080×1920 de 30 fps con movimiento.
   for (const [i, t] of g.tomas.entries()) {
     const f = archivos[t.fuente]
@@ -215,7 +270,7 @@ export async function armarReel(opts: { guion: GuionReel; gancho: string; archiv
       const z = t.movimiento === "acercar" ? `(1+0.22*${k})` : t.movimiento === "alejar" ? `(1.22-0.22*${k})` : "1.12"
       const px = t.movimiento === "paneo_derecha" ? k : t.movimiento === "paneo_izquierda" ? `(1-${k})` : String(t.foco_x)
       await ff(["-loop", "1", "-t", String(d), "-i", f.archivo, "-vf",
-        `scale=1350:2400:force_original_aspect_ratio=increase,fps=30,scale=w='iw*${z}':h='ih*${z}':eval=frame,crop=${W}:${H}:x='(iw-${W})*${px}':y='(ih-${H})*${t.foco_y}',format=yuv420p,setsar=1`,
+        `fps=30,scale=w='iw*${z}':h='ih*${z}':eval=frame,crop=${W}:${H}:x='(iw-${W})*${px}':y='(ih-${H})*${t.foco_y}',format=yuv420p,setsar=1`,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2", out])
     }
   }

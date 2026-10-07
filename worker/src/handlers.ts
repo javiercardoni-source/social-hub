@@ -23,7 +23,9 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { PermanentError, type Job, type Queue } from "./queue.ts"
 import { MEDIA_BUCKET, storageFor, supabaseStorage } from "./storage.ts"
 import { compactVideo, decodeAudio, framesAt, grillaImagen, placaFondo, sceneCuts, fitForInstagramFeed, fitForStory, framesForAi, probe, sha256, thumbnail, toJpeg, UPLOAD_MAX_BYTES, withTmp, writeTmp } from "./media.ts"
-import { analyzeGrid, analyzeReference, classify, disenarPieza, recomendarMusica, writeCaption, writeHolidayPhrase } from "./ai.ts"
+import { analyzeGrid, analyzeReference, classify, disenarPieza, recomendarMusica, writeCaption, writeHolidayPhrase, verIngredientes } from "./ai.ts"
+import { asegurarIngredientes } from "./ingredientes.ts"
+import type { Ingredientes } from "../../shared/cos/ingredientes.ts"
 import { driveFromEnv, FOLDER_MIME } from "./drive.ts"
 import { BASE_MIMES, BASE_MAX_BYTES, elegirTanda, esIdDrive, TIPOS, type TipoTanda } from "../../shared/cos/base-fotos.ts"
 import { ensureRender, ensureTapa, exists, loadRenderPost, renderReviewed } from "./render.ts"
@@ -288,7 +290,19 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
     mediaType: a.media_type ?? "photo",
     frames,
     archivo,
+    descripcionProvisoria: !!extra?.description_by_ai,
   })
+  // Archivo: se clasifica con el modelo liviano, pero los ingredientes los mira siempre el completo
+  // (de ahí salen los textos, y la descripción además la escribió otra IA).
+  if (archivo) {
+    const ing = await verIngredientes({ db, model: s.ai_model, frames, dicho: extra?.description_by_ai ? null : a.description, provisoria: !!extra?.description_by_ai, assetId: a.id }).catch(
+      (e) => (log("no se pudieron mirar los ingredientes del archivo", { asset: a.id, error: String(e).slice(0, 200) }), null),
+    )
+    if (ing) {
+      c.ingredientes_visibles = ing.visibles
+      c.ingredientes_dudosos = ing.dudosos
+    }
+  }
 
   // Caras de clientes o menores: se bloquea hasta que una persona lo revise (la base
   // impide programar cualquier post que lo use).
@@ -323,9 +337,9 @@ const classifyAsset: Handler = async (job, { db, queue, log }) => {
 const draftPost: Handler = async (job, { db, queue, log }) => {
   const assetId = idFrom(job, "asset_id")
   const a = (await must(
-    db.from("cos_assets").select(`${ASSET_COLS}, source, consent, ai_json, duration_ms, review_status`).eq("id", assetId).single(),
+    db.from("cos_assets").select(`${ASSET_COLS}, source, consent, ai_json, duration_ms, review_status, description_by_ai`).eq("id", assetId).single(),
     "asset",
-  )) as AssetRow & { source: string; consent: string; ai_json: { summary?: string } | null; duration_ms: number | null; review_status: string | null }
+  )) as AssetRow & { source: string; consent: string; ai_json: { summary?: string } | null; duration_ms: number | null; review_status: string | null; description_by_ai: boolean | null }
   // Borradores: lo que manda la cocina o se sube a mano, y el archivo que Javier eligió "Usar".
   const permitido = ["manual", "turnos"].includes(a.source) || a.review_status === "approved"
   if (!permitido || a.consent === "blocked" || !a.current_version_id) {
@@ -362,6 +376,8 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
       brandId: a.brand_id,
       versiones: [v as VersionReel],
       assetId: a.id,
+      aiJson: a.ai_json,
+      descripcionPorIA: !!a.description_by_ai,
       descripcion: a.description ?? "",
       resumen: a.ai_json?.summary ?? "",
       origen: `asset:${a.id}`,
@@ -372,6 +388,18 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     return
   }
   const isVideo = a.media_type === "video"
+  const ingredientes = await asegurarIngredientes(db, {
+    model: s.ai_model,
+    assetId: a.id,
+    aiJson: a.ai_json,
+    frames: async () => {
+      const { data: v } = await db.from("cos_asset_versions").select("id, storage_driver, storage_key, drive_file_id, mime").eq("id", a.current_version_id).single()
+      return v ? [await fotoDeVersion(db, v as VersionRow)] : []
+    },
+    dicho: a.description_by_ai ? null : a.description,
+    provisoria: !!a.description_by_ai,
+    log,
+  })
   const c = await writeCaption({
     db,
     model: s.ai_model,
@@ -381,6 +409,8 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     postType: isVideo ? "reel" : "feed",
     description: a.description ?? "",
     aiSummary: a.ai_json?.summary ?? "",
+    ingredientes,
+    descripcionPorIA: !!a.description_by_ai,
     context: await contextForBrand(db, a.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
     clima: await climaParaHoy(db, a.brand_id).catch((e) => (log("sin clima", { error: String(e) }), null)),
   })
@@ -432,6 +462,7 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
           music_key: withMusic && !(f.platform === "instagram" && f.post_type === "feed") ? pick : null,
           pick_json: withMusic && !(f.platform === "instagram" && f.post_type === "feed") && eleccion ? { ...eleccion.pick, final: eleccion.key } : null,
           uses_weather: c.usa_clima || (f.post_type === "story" && !!overlayClima),
+          avisos: f.post_type === "story" ? [] : c.avisos,
           status: "DRAFT",
         })
         .select("id")
@@ -469,6 +500,10 @@ async function borradoresReel(
     brandId: string
     versiones: VersionReel[]
     assetId: string
+    /** ai_json del asset principal (sus listas de ingredientes; si no las tiene, se miran al armar el guion). */
+    aiJson?: unknown
+    /** La descripción la escribió la IA (archivo), no una persona. */
+    descripcionPorIA?: boolean
     descripcion: string
     resumen: string
     origen: string
@@ -494,15 +529,17 @@ async function borradoresReel(
   const musicKeys = await listMusic(db, brand.slug)
   const propuestos = await temasParaReel(db, { brandId: o.brandId, disponibles: musicKeys, semilla: `reel:${o.origen}` })
   const temas = (propuestos.keys.length ? propuestos.keys : musicKeys).map((k) => k.split("/").pop()!)
-  const { guion, respaldo } = await planearReel({
+  const combos = datos.combos.filter((c) => c.activo).map((c) => c.nombre)
+  const { guion, respaldo, ingredientes, avisos: avisosGuion } = await planearReel({
     db,
     model: s.ai_model,
     brand,
     versiones: o.versiones,
     temas,
-    combos: datos.combos.filter((c) => c.activo).map((c) => c.nombre),
+    combos,
     prohibidas: brand.rules.forbidden_words ?? [],
     assetId: o.assetId,
+    asset: { id: o.assetId, aiJson: o.aiJson, descripcion: o.descripcion, descripcionPorIA: o.descripcionPorIA },
     log,
   })
 
@@ -513,8 +550,12 @@ async function borradoresReel(
     assetId: o.assetId,
     platform: "instagram",
     postType: "reel",
-    description: [guion.idea, o.descripcion].filter(Boolean).join(" · "),
+    description: o.descripcion,
+    ideaReel: guion.idea,
     aiSummary: o.resumen,
+    ingredientes,
+    descripcionPorIA: o.descripcionPorIA,
+    combos,
     context: await contextForBrand(db, o.brandId).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
     clima: await climaParaHoy(db, o.brandId).catch((e) => (log("sin clima", { error: String(e) }), null)),
   })
@@ -566,6 +607,7 @@ async function borradoresReel(
           pick_json: propuestos.pick ? { ...propuestos.pick, final: musicKey, porque: musicKey === propuestos.pick.elegido ? propuestos.pick.porque : `🎵 ${guion.musica?.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ") ?? ""} · elegida por el guion entre las 3 que propuso el motor` } : null,
           montaje,
           uses_weather: c.usa_clima || (story && !!ganchoClima),
+          avisos: story ? avisosGuion : [...new Set([...avisosGuion, ...c.avisos])],
           status: "DRAFT",
         })
         .select("id")
@@ -602,10 +644,10 @@ const buildReel: Handler = async (job, ctx) => {
   if (!Array.isArray(ids) || !ids.length || ids.length > 8 || ids.some((x) => typeof x !== "string")) throw new PermanentError("payload sin asset_ids válidos (1 a 8)")
   const { data, error } = await db
     .from("cos_assets")
-    .select("id, brand_id, consent, status, description, ai_json, current_version_id, cos_asset_versions!cos_assets_current_version_fk(id, storage_driver, storage_key, drive_file_id, mime, size_bytes)")
+    .select("id, brand_id, consent, status, description, description_by_ai, ai_json, current_version_id, cos_asset_versions!cos_assets_current_version_fk(id, storage_driver, storage_key, drive_file_id, mime, size_bytes)")
     .in("id", ids as string[])
   if (error) throw new Error(`assets: ${error.message}`)
-  type A = { id: string; brand_id: string; consent: string; status: string; description: string | null; ai_json: { summary?: string } | null; cos_asset_versions: (VersionReel & { size_bytes: number | null }) | null }
+  type A = { id: string; brand_id: string; consent: string; status: string; description: string | null; description_by_ai: boolean | null; ai_json: { summary?: string } | null; cos_asset_versions: (VersionReel & { size_bytes: number | null }) | null }
   const byId = new Map(((data ?? []) as unknown as A[]).map((a) => [a.id, a]))
   // En el orden que eligió Javier.
   const assets = (ids as string[]).map((i) => byId.get(i)).filter((a): a is A => !!a)
@@ -620,6 +662,8 @@ const buildReel: Handler = async (job, ctx) => {
     brandId,
     versiones: assets.map((a) => a.cos_asset_versions!),
     assetId: assets[0].id,
+    aiJson: assets[0].ai_json,
+    descripcionPorIA: assets.some((a) => a.description_by_ai),
     descripcion: assets.map((a) => a.description).filter(Boolean).join(" · ").slice(0, 1500),
     resumen: assets.map((a) => a.ai_json?.summary).filter(Boolean).join(" · ").slice(0, 1500),
     origen: `build:${buildId}`,
@@ -953,7 +997,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     .from("cos_posts")
     .select(
       `id, status, platform, post_type, caption, overlay_text, template, music_key, brand_id, diseno,
-       cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(id, description, ai_json)))`,
+       cos_post_media(position, cos_asset_versions(id, storage_driver, storage_key, drive_file_id, mime, cos_assets!cos_asset_versions_asset_id_fkey(id, description, description_by_ai, ai_json)))`,
     )
     .in("id", ids as string[])
     .eq("status", "PENDING_APPROVAL")
@@ -968,7 +1012,10 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     music_key: string | null
     brand_id: string
     diseno: { plantilla?: string } | null
-    cos_post_media: { position: number; cos_asset_versions: { cos_assets: { id: string; description: string | null; ai_json: { summary?: string } | null } | null } | null }[]
+    cos_post_media: {
+      position: number
+      cos_asset_versions: (VersionRow & { cos_assets: { id: string; description: string | null; description_by_ai: boolean | null; ai_json: { summary?: string } | null } | null }) | null
+    }[]
   }[]
   if (!posts.length) return
   const first = posts.find((p) => p.post_type !== "story") ?? posts[0]
@@ -987,18 +1034,20 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     // "Otra música": el motor propone 3 que no son el actual y la IA elige entre ellos.
     const propuestosRedo = await temasParaReel(db, { brandId: first.brand_id, disponibles: musicKeys, semilla: `redo:${job.id}`, excluir: otraMusica && reelPrev.music_key ? [reelPrev.music_key] : [] })
     const temasPedido = (propuestosRedo.keys.length ? propuestosRedo.keys : musicKeys).map((k) => k.split("/").pop()!)
-    const { guion, respaldo } = await planearReel({
+    const combos = datos.combos.filter((x) => x.activo).map((x) => x.nombre)
+    const { guion, respaldo, ingredientes, avisos: avisosGuion } = await planearReel({
       db,
       model: s.ai_model,
       brand,
       versiones: reelPrev.versiones,
       temas: temasPedido,
-      combos: datos.combos.filter((x) => x.activo).map((x) => x.nombre),
+      combos,
       prohibidas: brand.rules.forbidden_words ?? [],
       pedido: request,
       anterior: { gancho: reelPrev.montaje.gancho, idea: reelPrev.montaje.idea ?? "" },
       assetId: asset.id,
       postId: first.id,
+      asset: { id: asset.id, aiJson: asset.ai_json, descripcion: asset.description, descripcionPorIA: !!asset.description_by_ai },
       log,
     })
     const cr = await writeCaption({
@@ -1008,8 +1057,12 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
       assetId: asset.id,
       platform: "instagram",
       postType: "reel",
-      description: [guion.idea, asset.description ?? ""].filter(Boolean).join(" · "),
+      description: asset.description ?? "",
+      ideaReel: guion.idea,
       aiSummary: asset.ai_json?.summary ?? "",
+      ingredientes,
+      descripcionPorIA: !!asset.description_by_ai,
+      combos,
       request,
       previous: { caption: first.caption, overlay: first.overlay_text },
       context: await contextForBrand(db, first.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
@@ -1027,6 +1080,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
         overlay_text: gancho.slice(0, 80),
         music_key: musicKey,
         montaje,
+        avisos: p.post_type === "story" ? avisosGuion : [...new Set([...avisosGuion, ...cr.avisos])],
         render_key: null,
         render_qa: null,
       })
@@ -1048,6 +1102,16 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     return
   }
 
+  const version = first.cos_post_media[0]?.cos_asset_versions
+  const ingredientes = await asegurarIngredientes(db, {
+    model: s.ai_model,
+    assetId: asset.id,
+    aiJson: asset.ai_json,
+    frames: async () => (version ? [await fotoDeVersion(db, version)] : []),
+    dicho: asset.description_by_ai ? null : asset.description,
+    provisoria: !!asset.description_by_ai,
+    log,
+  })
   const c = await writeCaption({
     db,
     model: s.ai_model,
@@ -1057,6 +1121,8 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
     postType: first.post_type === "story" ? "feed" : first.post_type,
     description: asset.description ?? "",
     aiSummary: asset.ai_json?.summary ?? "",
+    ingredientes,
+    descripcionPorIA: !!asset.description_by_ai,
     request,
     previous: { caption: first.caption, overlay: first.overlay_text },
     context: await contextForBrand(db, first.brand_id).catch((e) => (log("sin contexto del día", { error: String(e) }), "")),
@@ -1083,6 +1149,7 @@ const redoPosts: Handler = async (job, { db, queue, log }) => {
       template: otroDiseno ? nextTemplate(p.template) : p.template,
       music_key: nextMusic,
       ...(otra ? { pick_json: otra.pick } : {}),
+      avisos: p.post_type === "story" ? [] : c.avisos,
       render_key: null,
       // Contenido nuevo: la posición se vuelve a decidir con la revisión visual.
       overlay_layout: null,
@@ -1935,8 +2002,11 @@ async function disenar(
     evitar?: string
     forzar?: string
     pedido?: string
+    ingredientes?: Ingredientes | null
+    descripcionPorIA?: boolean
+    combos?: string[]
   },
-): Promise<Diseno & { razon: string }> {
+): Promise<Diseno & { razon: string; avisos: string[] }> {
   const s = await settings(db)
   const opciones = plantillasDe(o.slug, o.formato, o.habilitadas)
   const forzada = o.forzar ? plantilla(o.forzar) : null
@@ -1953,12 +2023,15 @@ async function disenar(
     resumen: o.resumen,
     evitar: o.evitar,
     pedido: o.pedido,
+    ingredientes: o.ingredientes,
+    descripcionPorIA: o.descripcionPorIA,
+    combos: o.combos,
   })
   const p = plantilla(r.plantilla)!
   const d: Diseno = { plantilla: p.id, campos: normalizarCampos(p, r.campos, o.evitar ?? "") }
   if (p.fotos === 4) d.fotos = await fotosParaGrilla(db, o.brandId, o.versionId)
   if (p.id.startsWith("bj_galeria")) d.numero = await numeroDePieza(db, o.brandId)
-  return { ...d, razon: r.razon }
+  return { ...d, razon: r.razon, avisos: r.avisos }
 }
 
 /**
@@ -1969,12 +2042,13 @@ async function disenar(
  */
 const fotoPost: Handler = async (job, { db, queue, log }) => {
   const assetId = idFrom(job, "asset_id")
-  const a = (await must(db.from("cos_assets").select(`${ASSET_COLS}, consent, ai_json`).eq("id", assetId).single(), "asset")) as AssetRow & {
+  const a = (await must(db.from("cos_assets").select(`${ASSET_COLS}, consent, ai_json, description_by_ai`).eq("id", assetId).single(), "asset")) as AssetRow & {
     consent: string
     ai_json: { summary?: string } | null
+    description_by_ai: boolean | null
   }
   if (a.media_type !== "photo" || a.consent === "blocked" || !a.current_version_id) return
-  const { data: b } = await db.from("cos_brands").select("slug, plantillas").eq("id", a.brand_id).single()
+  const { data: b } = await db.from("cos_brands").select("slug, plantillas, datos_vigentes").eq("id", a.brand_id).single()
   const slug = b?.slug ?? ""
   const habilitadas = (b?.plantillas ?? []) as string[]
   if (!habilitadas.length) return
@@ -1997,16 +2071,30 @@ const fotoPost: Handler = async (job, { db, queue, log }) => {
   // Los hermanos de la misma foto (reel, su historia y Facebook): el post dice otra cosa que el reel.
   const { data: hermanos } = await db
     .from("cos_posts")
-    .select("id, post_type, platform, status, overlay_text, diseno")
+    .select("id, post_type, platform, status, overlay_text, diseno, avisos")
     .eq("brand_id", a.brand_id)
     .contains("montaje", { origen: `asset:${a.id}` })
     .not("status", "in", "(CANCELLED,REJECTED)")
   const gancho = hermanos?.find((h) => h.post_type === "reel")?.overlay_text ?? ""
-  const base = { brandId: a.brand_id, slug, habilitadas, assetId: a.id, versionId: v.id, foto, descripcion: a.description ?? "", resumen: a.ai_json?.summary ?? "" }
   const s = await settings(db)
+  const combos = normalizarDatos(b?.datos_vigentes).combos.filter((x) => x.activo).map((x) => x.nombre)
+  const ingredientes = await asegurarIngredientes(db, { model: s.ai_model, assetId: a.id, aiJson: a.ai_json, frames: async () => [foto], dicho: a.description_by_ai ? null : a.description, provisoria: !!a.description_by_ai, log })
+  const base = {
+    brandId: a.brand_id,
+    slug,
+    habilitadas,
+    assetId: a.id,
+    versionId: v.id,
+    foto,
+    descripcion: a.description ?? "",
+    resumen: a.ai_json?.summary ?? "",
+    ingredientes,
+    descripcionPorIA: !!a.description_by_ai,
+    combos,
+  }
   const creados: string[] = []
 
-  const nuevo = async (formato: FormatoDiseno, d: Diseno, caption: string, hashtags: string) => {
+  const nuevo = async (formato: FormatoDiseno, d: Diseno, caption: string, hashtags: string, avisos: string[]) => {
     const post = (await must(
       db
         .from("cos_posts")
@@ -2020,6 +2108,7 @@ const fotoPost: Handler = async (job, { db, queue, log }) => {
           overlay_text: textoDiseno(d).slice(0, 60),
           template: "none",
           diseno: d,
+          avisos,
           status: "DRAFT",
         })
         .select("id")
@@ -2033,7 +2122,7 @@ const fotoPost: Handler = async (job, { db, queue, log }) => {
   }
 
   if (plantillasDe(slug, "feed", habilitadas).length) {
-    const { razon, ...d } = await disenar(db, { ...base, formato: "feed", evitar: gancho })
+    const { razon, avisos: avisosDiseno, ...d } = await disenar(db, { ...base, formato: "feed", evitar: gancho })
     const c = await writeCaption({
       db,
       model: s.ai_model,
@@ -2041,18 +2130,26 @@ const fotoPost: Handler = async (job, { db, queue, log }) => {
       assetId: a.id,
       platform: "instagram",
       postType: "feed",
-      description: [a.description ?? "", `Post de foto con la plantilla «${plantilla(d.plantilla)?.nombre}»: ${textoDiseno(d)}`].filter(Boolean).join(" · "),
+      description: a.description ?? "",
       aiSummary: a.ai_json?.summary ?? "",
-      request: gancho ? `El reel de esta misma foto sale otro día con la frase "${gancho}": este texto tiene que ser distinto.` : undefined,
+      ingredientes,
+      descripcionPorIA: !!a.description_by_ai,
+      combos,
+      request: [
+        `La pieza lleva la plantilla «${plantilla(d.plantilla)?.nombre}» con este texto encima: ${textoDiseno(d)}.`,
+        gancho ? `El reel de esta misma foto sale otro día con la frase "${gancho}": este texto tiene que ser distinto.` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
       context: await contextForBrand(db, a.brand_id).catch(() => ""),
     })
-    await nuevo("feed", d, `${c.hook.trim()}\n${c.caption.trim()}`, c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" "))
+    await nuevo("feed", d, `${c.hook.trim()}\n${c.caption.trim()}`, c.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" "), [...new Set([...avisosDiseno, ...c.avisos])])
     log("post de foto con plantilla", { asset: a.id, plantilla: d.plantilla, razon })
   }
 
   if (plantillasDe(slug, "story", habilitadas).length) {
-    const { razon, ...d } = await disenar(db, { ...base, formato: "story", evitar: gancho })
-    await nuevo("story", d, "", "")
+    const { razon, avisos: avisosDiseno, ...d } = await disenar(db, { ...base, formato: "story", evitar: gancho })
+    await nuevo("story", d, "", "", avisosDiseno)
     // La historia con plantilla reemplaza a la historia-video del reel (no dos historias de la misma foto).
     for (const h of hermanos ?? []) if (h.post_type === "story" && h.status === "PENDING_APPROVAL") await setPost(db, h.id, { status: "CANCELLED" })
     log("historia con plantilla", { asset: a.id, plantilla: d.plantilla, razon })
@@ -2061,8 +2158,9 @@ const fotoPost: Handler = async (job, { db, queue, log }) => {
   // Tapa del reel: otra plantilla de feed, con el gancho del reel como texto principal.
   const reelIg = hermanos?.find((h) => h.post_type === "reel" && h.platform === "instagram" && h.status === "PENDING_APPROVAL" && !h.diseno)
   if (reelIg && plantillasDe(slug, "feed", habilitadas).length) {
-    const { razon, ...d } = await disenar(db, { ...base, formato: "feed", pedido: `Es la TAPA del reel (lo que se ve en la grilla del perfil). Usá la frase del reel "${gancho}" como texto principal.` })
-    await setPost(db, reelIg.id, { diseno: d })
+    const { razon, avisos: avisosDiseno, ...d } = await disenar(db, { ...base, formato: "feed", pedido: `Es la TAPA del reel (lo que se ve en la grilla del perfil). Usá la frase del reel "${gancho}" como texto principal.` })
+    const previos = Array.isArray(reelIg.avisos) ? (reelIg.avisos as string[]) : []
+    await setPost(db, reelIg.id, { diseno: d, avisos: [...new Set([...previos, ...avisosDiseno])] })
     await queue.enqueue("post:render", { post_id: reelIg.id }, { dedupeKey: `render:${reelIg.id}` })
     creados.push(`tapa:${d.plantilla}`)
     log("tapa del reel con plantilla", { post: reelIg.id, plantilla: d.plantilla, razon })
@@ -2083,14 +2181,14 @@ const disenarPost: Handler = async (job, { db, queue, log }) => {
   const { data: p } = await db
     .from("cos_posts")
     .select(
-      "id, status, brand_id, post_type, overlay_text, montaje, cos_brands(slug, plantillas), cos_post_media(position, cos_asset_versions(id, asset_id, storage_driver, storage_key, drive_file_id, mime, cos_assets!cos_asset_versions_asset_id_fkey(description, ai_json)))",
+      "id, status, brand_id, post_type, overlay_text, montaje, avisos, cos_brands(slug, plantillas), cos_post_media(position, cos_asset_versions(id, asset_id, storage_driver, storage_key, drive_file_id, mime, cos_assets!cos_asset_versions_asset_id_fkey(description, description_by_ai, ai_json)))",
     )
     .eq("id", postId)
     .single()
   if (!p) throw new PermanentError("el post no existe")
   if (p.status !== "PENDING_APPROVAL") return
   const marca = p.cos_brands as unknown as { slug: string; plantillas: string[] | null }
-  type Media = VersionRow & { asset_id: string; cos_assets: { description: string | null; ai_json: { summary?: string } | null } | null }
+  type Media = VersionRow & { asset_id: string; cos_assets: { description: string | null; description_by_ai: boolean | null; ai_json: { summary?: string } | null } | null }
   const media = (p.cos_post_media as unknown as { position: number; cos_asset_versions: Media | null }[]).sort((x, y) => x.position - y.position)[0]?.cos_asset_versions
   if (!media) throw new PermanentError("el post no tiene archivo")
   const reel = !!p.montaje
@@ -2099,20 +2197,35 @@ const disenarPost: Handler = async (job, { db, queue, log }) => {
   } else {
     if (reel && p.post_type !== "reel") throw new PermanentError("la historia de un reel es el video: no lleva plantilla")
     const formato: FormatoDiseno = p.post_type === "story" ? "story" : "feed"
-    const { razon, ...d } = await disenar(db, {
+    const foto = await fotoDeVersion(db, media)
+    const porIA = !!media.cos_assets?.description_by_ai
+    const ingredientes = await asegurarIngredientes(db, {
+      model: (await settings(db)).ai_model,
+      assetId: media.asset_id,
+      aiJson: media.cos_assets?.ai_json,
+      frames: async () => [foto],
+      dicho: porIA ? null : media.cos_assets?.description,
+      provisoria: porIA,
+      log,
+    })
+    const { razon, avisos, ...d } = await disenar(db, {
       brandId: p.brand_id,
       slug: marca.slug,
       habilitadas: marca.plantillas ?? [],
       formato,
       assetId: media.asset_id,
       versionId: media.id,
-      foto: await fotoDeVersion(db, media),
+      foto,
       descripcion: media.cos_assets?.description ?? "",
       resumen: media.cos_assets?.ai_json?.summary ?? "",
       forzar: elegida || undefined,
       pedido: [reel ? `Es la TAPA del reel. Usá la frase del reel "${p.overlay_text}" como texto principal.` : "", pedido].filter(Boolean).join(" "),
+      ingredientes,
+      descripcionPorIA: porIA,
     })
-    await setPost(db, postId, reel ? { diseno: d } : { diseno: d, template: "none", overlay_text: textoDiseno(d).slice(0, 60), render_key: null, render_qa: null, overlay_layout: null })
+    const previos = Array.isArray(p.avisos) ? (p.avisos as string[]) : []
+    const todos = [...new Set([...previos, ...avisos])]
+    await setPost(db, postId, reel ? { diseno: d, avisos: todos } : { diseno: d, avisos: todos, template: "none", overlay_text: textoDiseno(d).slice(0, 60), render_key: null, render_qa: null, overlay_layout: null })
     log("plantilla cambiada", { post: postId, plantilla: d.plantilla, razon })
   }
   await queue.enqueue("post:render", { post_id: postId }, { dedupeKey: `render:${postId}` })

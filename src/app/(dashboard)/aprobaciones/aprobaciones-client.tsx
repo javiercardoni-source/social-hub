@@ -26,6 +26,8 @@ export type PostItem = {
   musicKey: string | null
   position: "auto" | "top" | "bottom"
   qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
+  /** Avisos de la IA para quien aprueba (p. ej. "El texto nombra «palta» y no se ve en la imagen"). */
+  avisos: string[]
   suggestions: { at: string; label: string; lift: string; up: boolean; confianza: string }[]
   template: string
   /** Por qué el motor de gustos eligió este tema (F7 M2). */
@@ -686,6 +688,11 @@ function GrupoCard({ g }: { g: Grupo }) {
                   : `⚠ La IA detectó que ${p.qa.tapa ? `tapa ${p.qa.tapa}` : "no se lee bien"}. Probá otra posición, otra plantilla, o "Sin nada".`}
               </p>
             )}
+            {p.avisos.map((a) => (
+              <p key={a} className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">
+                ⚠ {a}. Rehacela con un pedido («no nombres eso») o rechazala.
+              </p>
+            ))}
             {(t.template === "banda" || t.template === "etiqueta") && (
               <input
                 value={t.overlay}

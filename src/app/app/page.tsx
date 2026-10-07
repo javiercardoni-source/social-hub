@@ -17,7 +17,7 @@ export default async function AppAprobarPage() {
   const db = createAdminClient()
 
   const [{ pendientes, preparando, grupos }, { data: marcasRaw }] = await Promise.all([
-    cargarAprobaciones(brand),
+    cargarAprobaciones(brand, { soloListas: true }),
     db.from("cos_brands").select("slug, name, color").eq("active", true).order("name"),
   ])
 
@@ -38,6 +38,7 @@ export default async function AppAprobarPage() {
       mediaUrl: g.mediaUrl,
       mediaEsVideo: g.isVideo,
       qa: p.qa,
+      avisos: p.avisos,
       motor: p.motor,
       musicaPorque: p.musicaPorque,
       reel: p.reel,

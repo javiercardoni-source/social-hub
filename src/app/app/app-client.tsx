@@ -30,6 +30,7 @@ export type Tarjeta = {
   mediaUrl: string | null
   mediaEsVideo: boolean
   qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
+  avisos: string[]
   motor: { at: string; porque: string; prueba: boolean; fijo: boolean } | null
   musicaPorque: string | null
   reel: { idea: string; segundos: number; respaldo: boolean } | null
@@ -587,6 +588,11 @@ function InfoTarjeta({ t, variante }: { t: Tarjeta; variante: "overlay" | "debaj
         {t.riskFlags.map((f) => (
           <span key={f} className="flex items-center gap-1 rounded-full bg-amber-500/25 px-2 py-0.5 text-[11px] font-medium text-amber-200">
             <AlertTriangle className="h-3 w-3" /> {FLAG_TEXT[f] ?? f}
+          </span>
+        ))}
+        {t.avisos.map((a) => (
+          <span key={a} className="flex items-center gap-1 rounded-full bg-amber-500/25 px-2 py-0.5 text-[11px] font-medium text-amber-200">
+            <AlertTriangle className="h-3 w-3" /> {a}
           </span>
         ))}
         {t.reel?.respaldo && <span className="rounded-full bg-amber-500/25 px-2 py-0.5 text-[11px] font-medium text-amber-200">guion automático</span>}

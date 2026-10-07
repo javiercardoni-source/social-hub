@@ -4,6 +4,8 @@
  * Sin dependencias: el worker los corre directo con Node 24.
  */
 
+import { REGLA_INGREDIENTES_VISTA, bloqueIngredientes, type Ingredientes } from "./ingredientes.ts"
+
 export type BrandContext = {
   name: string
   slug: string
@@ -92,6 +94,8 @@ export function classifierPrompt(input: {
   frames: number
   /** Material de archivo de la marca (fotógrafo, campañas, publicaciones anteriores). */
   archivo?: boolean
+  /** La descripción no la escribió una persona (nombre de carpeta o de archivo, u otra IA): no vale como dato. */
+  descripcionProvisoria?: boolean
 }): string {
   return [
     input.archivo
@@ -99,7 +103,9 @@ export function classifierPrompt(input: {
         "profesional, campañas y publicaciones anteriores), no algo que mandó la cocina hoy."
       : "Sos el clasificador editorial de Content OS. Te llega material que mandó un empleado desde la cocina.",
     "",
-    `Descripción del empleado: "${input.description}"`,
+    input.descripcionProvisoria
+      ? `Descripción PROVISORIA (nombre de carpeta/archivo u otra IA; NO la escribió una persona: no la tomes como verdad sobre lo que hay): "${input.description}"`
+      : `Descripción del empleado: "${input.description}"`,
     `Lo mandó: ${input.submittedBy ?? "(sin dato)"}`,
     input.mediaType === "video"
       ? `Es un VIDEO: te paso ${input.frames} fotogramas en orden.`
@@ -107,8 +113,9 @@ export function classifierPrompt(input: {
     "",
     "Devolvé la clasificación. Criterios:",
     VOCABULARIO_AR,
-    "- summary: una línea, qué es.",
+    "- summary: una línea, qué es, SIN adivinar ingredientes (nombrá solo los que van en ingredientes_visibles).",
     "- products: solo productos que el empleado nombra o que se ven con claridad.",
+    REGLA_INGREDIENTES_VISTA,
     "- quality_score 0-100: foco, luz, encuadre, que el producto se vea apetitoso.",
     "- commercial_value 0-100: qué tan útil es para vender.",
     "- people_present: true si aparece cualquier persona (manos con guantes no cuentan).",
@@ -132,6 +139,28 @@ const RASGOS_CRITERIO = [
   "  En video, mirá el conjunto de fotogramas: el plano y la acción que más se repiten.",
 ].join("\n")
 
+/**
+ * Mirada específica de ingredientes (07-10-2026): para lo clasificado antes de que existieran las
+ * listas y para el material de archivo (que se clasifica con el modelo liviano y cuya descripción
+ * la escribió una IA). Solo las dos listas; nada más.
+ */
+export function ingredientesPrompt(input: { frames: number; dicho?: string | null; provisoria?: boolean }): string {
+  return [
+    input.frames > 1 ? `Te paso ${input.frames} fotogramas de un VIDEO de comida.` : "Te paso una FOTO de comida.",
+    input.dicho?.trim()
+      ? input.provisoria
+        ? `Hay una descripción PROVISORIA (no la escribió una persona; puede estar mal): "${input.dicho.trim()}". No la tomes como verdad.`
+        : `El empleado dijo: "${input.dicho.trim()}" (lo que nombra una persona se puede tomar como visto).`
+      : "",
+    "",
+    "Devolvé solo las dos listas de ingredientes, en español de Argentina:",
+    REGLA_INGREDIENTES_VISTA,
+    VOCABULARIO_AR,
+  ]
+    .filter((l) => l !== "")
+    .join("\n")
+}
+
 /** Prompt de la clasificación liviana: solo los rasgos visuales (backfill de F7). */
 export function rasgosPrompt(input: { mediaType: "photo" | "video"; frames: number }): string {
   return [
@@ -150,12 +179,21 @@ export function captionPrompt(input: {
   descriptions: string[]
   aiSummaries: string[]
   extraInstructions?: string
+  /** Lo que se ve con certeza en la imagen (clasificador). null = sin lista: no se nombra ningún ingrediente. */
+  ingredientes?: Ingredientes | null
+  /** La descripción la escribió la IA (material de archivo), no una persona: vale como "se ve", no como dato. */
+  descripcionPorIA?: boolean
+  /** Idea del reel que armó el motor mirando las tomas (va aparte: no es lo que dijo el empleado). */
+  ideaReel?: string
 }): string {
+  const quien = input.descripcionPorIA ? "Descripción (la escribió la IA mirando la imagen, no una persona)" : "Empleado"
   return [
     `Escribí el texto de una publicación de ${input.platform === "instagram" ? "Instagram" : "Facebook"} (${input.postType}).`,
     "",
     "Material (lo que contó el equipo y lo que vio la IA):",
-    ...input.descriptions.map((d, i) => `${i + 1}. Empleado: "${d}"${input.aiSummaries[i] ? ` · Se ve: ${input.aiSummaries[i]}` : ""}`),
+    ...input.descriptions.map((d, i) => `${i + 1}. ${quien}: "${d}"${input.aiSummaries[i] ? ` · Se ve: ${input.aiSummaries[i]}` : ""}`),
+    input.ideaReel?.trim() ? `Idea del reel (la escribió el motor mirando las tomas): "${input.ideaReel.trim()}"` : "",
+    bloqueIngredientes(input.ingredientes ?? null),
     "",
     "Formato:",
     "- hook: la primera línea, la que frena el scroll.",
@@ -166,6 +204,7 @@ export function captionPrompt(input: {
     "- rationale: una línea para quien aprueba, explicando por qué este texto (qué dato usaste).",
     "",
     "Si el material no alcanza para decir algo concreto, no lo inventes: hacé un texto más general.",
+    "Ingredientes: SOLO los de la lista de los que se ven o los que dijo el empleado (también en el hook, la frase y los hashtags).",
     input.extraInstructions ? `Pedido extra de quien aprueba: ${input.extraInstructions}` : "",
   ]
     .filter(Boolean)
@@ -191,10 +230,15 @@ export function reelPrompt(input: {
   ritmo?: "normal" | "rafaga"
   /** Palabra por corte: una palabra de una frase de la marca sobre cada toma. */
   karaoke?: boolean
+  /** Lo que se ve con certeza en las fuentes. null = sin lista: los textos no nombran ingredientes. */
+  ingredientes?: Ingredientes | null
 }): string {
   const rafaga = input.ritmo === "rafaga"
   return [
     `Sos editor de reels de ${input.marca}. Armás un REEL vertical 9:16 de 12 a 16 s con estas fuentes.`,
+    "",
+    bloqueIngredientes(input.ingredientes ?? null),
+    "Vale para gancho, medio, titulo_cierre, palabras e idea: ningún ingrediente fuera de esa lista.",
     "",
     rafaga
       ? "RITMO RÁFAGA (el estilo de la marca): 10 a 20 tomas CORTAS, todas con corte seco, al ritmo de la música. Cada una sale de UNA fuente; " +

@@ -6,7 +6,8 @@ import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { z } from "zod"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, rasgosPrompt, reelPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { RISK_FLAGS, brandSystemPrompt, captionPrompt, classifierPrompt, ingredientesPrompt, rasgosPrompt, reelPrompt, type BrandContext, type CaptionPlatform } from "../../shared/cos/prompts.ts"
+import { avisoIngrediente, bloqueIngredientes, ingredientesSinRespaldo, normalizarLista, respaldoDe, type Ingredientes } from "../../shared/cos/ingredientes.ts"
 import { RECUADROS } from "../../shared/cos/reel.ts"
 import { RASGOS, costoUsd } from "../../shared/cos/gustos.ts"
 import { CLAVES_CAMPO, type Plantilla } from "../../shared/cos/plantillas.ts"
@@ -35,6 +36,8 @@ export const Classification = z.object({
   summary: z.string(),
   category: z.string(),
   products: z.array(z.string()),
+  ingredientes_visibles: z.array(z.string()).describe("Ingredientes que se ven con CERTEZA, en español de Argentina. Si dudás, no va acá."),
+  ingredientes_dudosos: z.array(z.string()).describe("Ingredientes que podrían estar pero no se distinguen con seguridad. Nunca se nombran en los textos."),
   topics: z.array(z.string()),
   mood: z.array(z.string()),
   people_present: z.boolean(),
@@ -66,6 +69,8 @@ export async function classify(opts: {
   frames: Buffer[]
   /** Material de archivo de la marca (base de fotos, carpetas, Instagram), no de la cocina hoy. */
   archivo?: boolean
+  /** La descripción no la escribió una persona (carpeta/archivo u otra IA). */
+  descripcionProvisoria?: boolean
 }): Promise<Classification> {
   const response = await anthropic().messages.parse({
     model: opts.model,
@@ -87,6 +92,7 @@ export async function classify(opts: {
               mediaType: opts.mediaType,
               frames: opts.frames.length,
               archivo: opts.archivo,
+              descripcionProvisoria: opts.descripcionProvisoria,
             }),
           },
         ],
@@ -98,8 +104,57 @@ export async function classify(opts: {
   await logUsage(opts.db, { purpose: "asset:classify", model: opts.model, usage: response.usage, assetId: opts.assetId })
 
   if (!response.parsed_output) throw new Error(`la IA no devolvió una clasificación válida (stop: ${response.stop_reason})`)
-  return response.parsed_output
+  const c = response.parsed_output
+  return { ...c, ingredientes_visibles: normalizarLista(c.ingredientes_visibles), ingredientes_dudosos: normalizarLista(c.ingredientes_dudosos) }
 }
+
+const IngredientesIA = z.object({
+  visibles: z.array(z.string()).describe("Ingredientes que se ven con CERTEZA, en español de Argentina"),
+  dudosos: z.array(z.string()).describe("Ingredientes que podrían estar pero no se distinguen con seguridad"),
+})
+
+/**
+ * Mirada específica de ingredientes: solo las dos listas (worker/src/ingredientes.ts decide cuándo
+ * hace falta). Siempre con el modelo completo: acá la precisión es todo.
+ */
+export async function verIngredientes(opts: { db: SupabaseClient; model: string; frames: Buffer[]; dicho?: string | null; provisoria?: boolean; assetId?: string }): Promise<Ingredientes> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 1500,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...opts.frames.map((f) => ({ type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: f.toString("base64") } })),
+          { type: "text", text: ingredientesPrompt({ frames: opts.frames.length, dicho: opts.dicho, provisoria: opts.provisoria }) },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(IngredientesIA) },
+  })
+  await logUsage(opts.db, { purpose: "asset:ingredientes", model: opts.model, usage: response.usage, assetId: opts.assetId })
+  const r = response.parsed_output
+  if (!r) throw new Error(`la IA no devolvió los ingredientes (stop: ${response.stop_reason})`)
+  return { visibles: normalizarLista(r.visibles), dudosos: normalizarLista(r.dudosos) }
+}
+
+/**
+ * Control de ingredientes después de escribir (07-10-2026): lo que nombran los textos tiene que
+ * estar en los visibles, en lo que dijo una persona o en el nombre de un combo que el texto cita.
+ */
+export type RespaldoIngredientes = {
+  ingredientes: Ingredientes | null
+  /** Lo que dijo una PERSONA (null si la descripción la escribió la IA). */
+  dichoPorPersona?: string | null
+  combos?: string[]
+}
+export function controlarIngredientes(textos: string[], r: RespaldoIngredientes): string[] {
+  const limpios = textos.filter(Boolean)
+  return ingredientesSinRespaldo(limpios, respaldoDe({ ingredientes: r.ingredientes, dichoPorPersona: r.dichoPorPersona, combos: r.combos, texto: limpios.join(" ") }))
+}
+export const correccion = (malos: string[]) =>
+  `CORRECCIÓN OBLIGATORIA: la versión anterior nombró «${malos.join("», «")}» y eso NO se ve en la imagen ni lo dijo nadie. ` +
+  "Escribila de nuevo sin nombrar eso (ni con sinónimos): si no estás seguro de qué lleva, hablá del plato sin detallar ingredientes."
 
 export const Caption = z.object({
   overlay: z
@@ -142,7 +197,15 @@ export async function writeCaption(opts: {
   context?: string
   /** Clima de hoy, solo cuando la regla permite usarlo (climaParaHoy). */
   clima?: string | null
-}): Promise<Caption> {
+  /** Lo que se ve con certeza (clasificador o mirada específica). null = sin lista: no se nombra ningún ingrediente. */
+  ingredientes?: Ingredientes | null
+  /** La descripción la escribió la IA (material de archivo), no una persona. */
+  descripcionPorIA?: boolean
+  /** Idea del reel que armó el motor: va aparte de lo que dijo el empleado. */
+  ideaReel?: string
+  /** Combos activos de Datos vigentes: si el texto cita uno completo, sus ingredientes valen. */
+  combos?: string[]
+}): Promise<Caption & { avisos: string[] }> {
   const extra = [
     opts.context
       ? "CONTEXTO REAL de estos días (usalo SOLO si suma naturalmente al post; si no, ignoralo. Nunca inventes fechas ni " +
@@ -163,27 +226,43 @@ export async function writeCaption(opts: {
   ]
     .filter(Boolean)
     .join("\n")
-  const response = await anthropic().messages.parse({
-    model: opts.model,
-    max_tokens: 4000,
-    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
-    messages: [
-      {
-        role: "user",
-        content: captionPrompt({
-          platform: opts.platform,
-          postType: opts.postType,
-          descriptions: [opts.description],
-          aiSummaries: [opts.aiSummary],
-          extraInstructions: extra || undefined,
-        }),
-      },
-    ],
-    output_config: { format: zodOutputFormat(Caption) },
-  })
-  await logUsage(opts.db, { purpose: opts.previous ? "post:redo" : "post:draft", model: opts.model, usage: response.usage, assetId: opts.assetId })
-  if (!response.parsed_output) throw new Error(`la IA no devolvió un texto válido (stop: ${response.stop_reason})`)
-  return response.parsed_output
+  const pedir = async (fix?: string) => {
+    const response = await anthropic().messages.parse({
+      model: opts.model,
+      max_tokens: 4000,
+      system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+      messages: [
+        {
+          role: "user",
+          content: captionPrompt({
+            platform: opts.platform,
+            postType: opts.postType,
+            descriptions: [opts.description],
+            aiSummaries: [opts.aiSummary],
+            extraInstructions: [extra, fix].filter(Boolean).join("\n") || undefined,
+            ingredientes: opts.ingredientes ?? null,
+            descripcionPorIA: opts.descripcionPorIA,
+            ideaReel: opts.ideaReel,
+          }),
+        },
+      ],
+      output_config: { format: zodOutputFormat(Caption) },
+    })
+    await logUsage(opts.db, { purpose: opts.previous ? "post:redo" : "post:draft", model: opts.model, usage: response.usage, assetId: opts.assetId })
+    if (!response.parsed_output) throw new Error(`la IA no devolvió un texto válido (stop: ${response.stop_reason})`)
+    return response.parsed_output
+  }
+  // Control de ingredientes: lo que nombra el texto tiene que verse (o haberlo dicho una persona).
+  // Una vez se le pide corregir; si insiste, queda el aviso para quien aprueba.
+  const respaldo: RespaldoIngredientes = { ingredientes: opts.ingredientes ?? null, dichoPorPersona: opts.descripcionPorIA ? null : opts.description, combos: opts.combos }
+  const textosDe = (c: Caption) => [c.hook, c.caption, c.overlay, c.overlay_clima, ...c.hashtags]
+  let c = await pedir()
+  let malos = controlarIngredientes(textosDe(c), respaldo)
+  if (malos.length) {
+    c = await pedir(correccion(malos))
+    malos = controlarIngredientes(textosDe(c), respaldo)
+  }
+  return { ...c, avisos: malos.map(avisoIngrediente) }
 }
 
 export const PieceReview = z.object({
@@ -502,6 +581,8 @@ export async function planReel(opts: {
   anterior?: { gancho: string; idea: string }
   assetId?: string
   postId?: string
+  /** Lo que se ve con certeza en las fuentes. null = sin lista: los textos no nombran ingredientes. */
+  ingredientes?: Ingredientes | null
 }): Promise<GuionIA> {
   const response = await anthropic().messages.parse({
     model: opts.model,
@@ -516,7 +597,21 @@ export async function planReel(opts: {
               ? { type: "text" as const, text: b.texto }
               : { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: b.jpg.toString("base64") } },
           ),
-          { type: "text", text: reelPrompt({ marca: opts.brand.name, recuadros: RECUADROS, temas: opts.temas, combos: opts.combos, pedido: opts.pedido, anterior: opts.anterior, estilo: opts.brand.estilos?.reel, ritmo: opts.brand.ritmoReel, karaoke: opts.brand.karaoke }) },
+          {
+            type: "text",
+            text: reelPrompt({
+              marca: opts.brand.name,
+              recuadros: RECUADROS,
+              temas: opts.temas,
+              combos: opts.combos,
+              pedido: opts.pedido,
+              anterior: opts.anterior,
+              estilo: opts.brand.estilos?.reel,
+              ritmo: opts.brand.ritmoReel,
+              karaoke: opts.brand.karaoke,
+              ingredientes: opts.ingredientes ?? null,
+            }),
+          },
         ],
       },
     ],
@@ -761,47 +856,65 @@ export async function disenarPieza(opts: {
   /** Frase que ya usa el reel de esta foto: el post tiene que decir otra cosa. */
   evitar?: string
   pedido?: string
-}): Promise<DisenoIA> {
+  /** Lo que se ve con certeza en la foto. null = sin lista: los textos no nombran ingredientes. */
+  ingredientes?: Ingredientes | null
+  /** La descripción la escribió la IA (archivo), no una persona. */
+  descripcionPorIA?: boolean
+  combos?: string[]
+}): Promise<DisenoIA & { avisos: string[] }> {
   const opciones = opts.forzar ? [opts.forzar] : opts.opciones
   if (!opciones.length) throw new PermanentError("la marca no tiene plantillas para este formato")
   const catalogo = opciones
     .map((p) => `- ${p.id} («${p.nombre}»): ${p.para}\n  campos: ${p.campos.length ? p.campos.map((c) => `${c.clave} (máx ${c.max} letras${c.opcional ? ", opcional" : ""}: ${c.ayuda})`).join("; ") : "ninguno"}`)
     .join("\n")
-  const response = await anthropic().messages.parse({
-    model: opts.model,
-    max_tokens: 2000,
-    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: opts.foto.toString("base64") } },
-          {
-            type: "text",
-            text: [
-              "Sos director de arte de la marca. Con ESTA foto se arma una pieza con una plantilla propia de la marca.",
-              opts.forzar ? `La plantilla ya está elegida: ${opts.forzar.id}. Solo escribí sus textos.` : "Elegí la plantilla que mejor le queda a la foto y escribí sus textos.",
-              "Plantillas:",
-              catalogo,
-              `Foto: ${opts.descripcion || "(sin descripción)"} · ${opts.resumen}`,
-              opts.evitar ? `El reel de esta misma foto ya dice "${opts.evitar}": esta pieza tiene que decir OTRA cosa.` : "",
-              opts.pedido ? `Pedido de quien aprueba: ${opts.pedido}` : "",
-              "Reglas: textos cortos y con la voz de la marca; respetá el máximo de letras de cada campo. NUNCA precios ni montos.",
-              "Nunca 'sin TACC', 'sin gluten' ni 'apto celíacos'. Solo nombres de productos que existan en los datos de la marca o se vean en la foto.",
-              "Sin emojis ni hashtags. Los campos que la plantilla no usa van vacíos.",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          },
-        ],
-      },
-    ],
-    output_config: { format: zodOutputFormat(DisenoIA) },
-  })
-  await logUsage(opts.db, { purpose: "post:diseno", model: opts.model, usage: response.usage, assetId: opts.assetId })
-  const r = response.parsed_output
-  if (!r) throw new Error(`la IA no devolvió un diseño válido (stop: ${response.stop_reason})`)
-  // Una plantilla que no estaba en la lista: la primera ofrecida (nunca una de otra marca).
-  if (!opciones.some((p) => p.id === r.plantilla)) r.plantilla = opciones[0].id
-  return r
+  const pedir = async (fix?: string) => {
+    const response = await anthropic().messages.parse({
+      model: opts.model,
+      max_tokens: 2000,
+      system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: opts.foto.toString("base64") } },
+            {
+              type: "text",
+              text: [
+                "Sos director de arte de la marca. Con ESTA foto se arma una pieza con una plantilla propia de la marca.",
+                opts.forzar ? `La plantilla ya está elegida: ${opts.forzar.id}. Solo escribí sus textos.` : "Elegí la plantilla que mejor le queda a la foto y escribí sus textos.",
+                "Plantillas:",
+                catalogo,
+                `${opts.descripcionPorIA ? "Descripción (la escribió la IA, no una persona)" : "Empleado"}: ${opts.descripcion || "(sin descripción)"} · Se ve: ${opts.resumen}`,
+                bloqueIngredientes(opts.ingredientes ?? null),
+                opts.evitar ? `El reel de esta misma foto ya dice "${opts.evitar}": esta pieza tiene que decir OTRA cosa.` : "",
+                opts.pedido ? `Pedido de quien aprueba: ${opts.pedido}` : "",
+                fix ?? "",
+                "Reglas: textos cortos y con la voz de la marca; respetá el máximo de letras de cada campo. NUNCA precios ni montos.",
+                "Nunca 'sin TACC', 'sin gluten' ni 'apto celíacos'. Solo nombres de productos que existan en los datos de la marca o se vean en la foto.",
+                "Ingredientes: SOLO los de la lista de los que se ven o los que dijo el empleado.",
+                "Sin emojis ni hashtags. Los campos que la plantilla no usa van vacíos.",
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            },
+          ],
+        },
+      ],
+      output_config: { format: zodOutputFormat(DisenoIA) },
+    })
+    await logUsage(opts.db, { purpose: "post:diseno", model: opts.model, usage: response.usage, assetId: opts.assetId })
+    const r = response.parsed_output
+    if (!r) throw new Error(`la IA no devolvió un diseño válido (stop: ${response.stop_reason})`)
+    // Una plantilla que no estaba en la lista: la primera ofrecida (nunca una de otra marca).
+    if (!opciones.some((p) => p.id === r.plantilla)) r.plantilla = opciones[0].id
+    return r
+  }
+  const respaldo: RespaldoIngredientes = { ingredientes: opts.ingredientes ?? null, dichoPorPersona: opts.descripcionPorIA ? null : opts.descripcion, combos: opts.combos }
+  let r = await pedir()
+  let malos = controlarIngredientes(Object.values(r.campos), respaldo)
+  if (malos.length) {
+    r = await pedir(correccion(malos))
+    malos = controlarIngredientes(Object.values(r.campos), respaldo)
+  }
+  return { ...r, avisos: malos.map(avisoIngrediente) }
 }

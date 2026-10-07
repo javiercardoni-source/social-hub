@@ -32,6 +32,7 @@ type RawPost = {
   music_key: string | null
   overlay_position: "auto" | "top" | "bottom"
   render_qa: { ok?: boolean; tapa?: string; legible?: boolean; skipped?: string } | null
+  avisos: unknown
   first_render_at: string | null
   campaign: string | null
   montaje: (GuionReel & { respaldo?: boolean }) | null
@@ -87,13 +88,23 @@ function haceMasDe(iso: string, min: number) {
   return Date.now() - new Date(iso).getTime() > min * 60_000
 }
 
-export async function cargarAprobaciones(brand: ActiveBrand | null): Promise<{ pendientes: number; preparando: number; grupos: Grupo[] }> {
+export async function cargarAprobaciones(
+  brand: ActiveBrand | null,
+  opts: {
+    /**
+     * Solo piezas listas y quietas (la app del celular, 07-10-2026: "que solo muestre lo que está listo y
+     * terminado"): sin render no se muestra aunque esté trabada, y tampoco si tiene un trabajo en la cola
+     * (se está rehaciendo: lo que se ve cambiaría enseguida). La web sí muestra lo trabado, para no perderlo.
+     */
+    soloListas?: boolean
+  } = {},
+): Promise<{ pendientes: number; preparando: number; grupos: Grupo[] }> {
   const db = createAdminClient()
 
   let query = db
     .from("cos_posts")
     .select(`
-      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, diseno, tapa_key, render_key, music_key, overlay_position, render_qa, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock, pick_json,
+      id, account_id, brand_id, caption, hashtags, platform, post_type, scheduled_at, created_at, overlay_text, template, diseno, tapa_key, render_key, music_key, overlay_position, render_qa, avisos, first_render_at, campaign, montaje, window_start, schedule_source, schedule_reason, schedule_lock, pick_json,
       cos_brands(name, color, slug, plantillas),
       cos_social_accounts(display_name),
       cos_post_media(
@@ -156,6 +167,7 @@ export async function cargarAprobaciones(brand: ActiveBrand | null): Promise<{ p
   for (const p of posts) {
     const k = [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions?.cos_assets?.id ?? p.id
     if ((!p.first_render_at || !p.render_key) && !trabado(p)) preparando.add(k)
+    if (opts.soloListas && (!p.first_render_at || !p.render_key || esperando.has(p.id))) preparando.add(k)
   }
 
   const grupos = new Map<string, Grupo>()
@@ -236,6 +248,7 @@ export async function cargarAprobaciones(brand: ActiveBrand | null): Promise<{ p
           }
         : null,
       renderUrl: p.render_key ? (urls[p.render_key] ?? null) : null,
+      avisos: Array.isArray(p.avisos) ? p.avisos.filter((x): x is string => typeof x === "string").slice(0, 5) : [],
       accountName: p.cos_social_accounts?.display_name ?? p.cos_brands?.name ?? "",
     })
   }

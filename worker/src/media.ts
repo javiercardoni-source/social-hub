@@ -81,10 +81,12 @@ export async function framesForAi(file: string, probeInfo: Probe, dir: string): 
       ? [0.1, 0.35, 0.6, 0.85].map((f) => (probeInfo.durationMs! / 1000) * f)
       : [null]
   const frames: Buffer[] = []
+  // Foto: 1568 px (el máximo que aprovecha la IA; a 1024 confundía ingredientes). Video: 4 cuadros a 1024.
+  const lado = probeInfo.mediaType === "video" ? 1024 : 1568
   for (const [i, at] of shots.entries()) {
     const out = join(dir, `frame-${i}.jpg`)
     const seek = at == null ? [] : ["-ss", at.toFixed(2)]
-    await run("ffmpeg", ["-y", ...seek, "-i", file, "-frames:v", "1", "-vf", "scale='min(1024,iw)':-2", "-q:v", "3", out], {
+    await run("ffmpeg", ["-y", ...seek, "-i", file, "-frames:v", "1", "-vf", `scale='min(${lado},iw)':-2`, "-q:v", "3", out], {
       timeout: FF_TIMEOUT_MS,
     })
     frames.push(await readFile(out))

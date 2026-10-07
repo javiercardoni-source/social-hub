@@ -124,6 +124,11 @@ Cada etapa recorre: **IMPLEMENT → TEST → CRITIC → FIX → REGRESSION → V
    - Aprobar deslizando = horario de la agenda; si la pieza no tiene horario de agenda, pregunta
      "Ya" o "Elegir día y hora" (no aprueba a ciegas).
 
+4. **Solo lo listo y terminado (07-10, tarde):** la app no muestra piezas sin render (aunque la web
+   las muestre como «trabadas» para no perderlas) ni piezas con un trabajo pendiente en la cola (se
+   están rehaciendo: lo que se ve cambiaría enseguida). `cargarAprobaciones(brand, { soloListas: true })`.
+   La web sigue mostrando lo trabado.
+
 ## Nota de proceso (07-10)
 El repaso de "UX Critic (celular)" de esta ronda se hizo directo (Playwright, perfil iPhone 15,
 contra producción, sesión real) en vez de delegarlo a un subagente aparte — el entorno de esta
