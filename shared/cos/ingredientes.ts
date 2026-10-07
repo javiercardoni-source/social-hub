@@ -79,6 +79,34 @@ const LEXICO: Record<string, string[]> = {
   coco: ["coco"],
   batata: ["batata"],
   espinaca: ["espinaca"],
+  remolacha: ["remolacha", "betarraga"],
+  kimchi: ["kimchi"],
+  repollo: ["repollo", "col"],
+  ananá: ["anana", "piña"],
+  calabaza: ["calabaza", "zapallo"],
+  berenjena: ["berenjena"],
+  nabo: ["nabo", "daikon"],
+  pistacho: ["pistacho"],
+  nuez: ["nuez"],
+}
+
+/**
+ * Lo que un plato trae por definición: nombrar "arroz" o "alga" al hablar de un onigiri o un roll no
+ * es inventar un ingrediente (sí lo sería un relleno o un topping). La implicación vale cuando el
+ * plato aparece en el texto o entre lo visible. "queso crema" visible también respalda "queso" a secas.
+ */
+const IMPLICITOS: { plato: string[]; trae: string[] }[] = [
+  { plato: ["onigiri", "roll", "maki", "uramaki", "temaki", "sushi", "futomaki", "hosomaki"], trae: ["arroz", "nori"] },
+  { plato: ["nigiri", "gunkan", "chirashi", "poke", "gohan"], trae: ["arroz"] },
+  { plato: ["queso crema"], trae: ["queso"] },
+]
+export function implicitosEn(textos: string[]): string[] {
+  const t = llano(textos.join(" \n "))
+  const out: string[] = []
+  for (const { plato, trae } of IMPLICITOS) {
+    if (plato.some((pl) => formasDe(sinTildes(pl)).some((f) => t.includes(` ${f} `)))) for (const i of trae) if (!out.includes(i)) out.push(i)
+  }
+  return out
 }
 
 const sinTildes = (x: string) =>
@@ -155,6 +183,7 @@ export function leerIngredientes(aiJson: unknown): Ingredientes | null {
 export function respaldoDe(o: { ingredientes: Ingredientes | null; dichoPorPersona?: string | null; combos?: string[]; texto: string }): Set<string> {
   const r = new Set<string>(o.ingredientes?.visibles.flatMap((v) => ingredientesEn(v)) ?? [])
   for (const i of ingredientesEn(o.dichoPorPersona ?? "")) r.add(i)
+  for (const i of implicitosEn([...(o.ingredientes?.visibles ?? []), o.dichoPorPersona ?? "", o.texto])) r.add(i)
   const t = llano(o.texto)
   for (const c of o.combos ?? []) {
     const nombre = llano(c).trim()

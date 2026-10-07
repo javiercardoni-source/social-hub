@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   bloqueIngredientes,
   ingredientesEn,
+  implicitosEn,
   ingredientesSinRespaldo,
   leerIngredientes,
   normalizarIngrediente,
@@ -117,5 +118,24 @@ describe("textosDePieza", () => {
   })
   it("ignora lo que no es texto o no es una plantilla válida", () => {
     expect(textosDePieza({ caption: null, montaje: "x", diseno: { plantilla: "no_existe", campos: { titulo: "Palta" } } }, "bijutsukan")).toEqual([])
+  })
+})
+
+describe("implícitos del plato", () => {
+  it("hablar de un onigiri o un roll habilita arroz y alga; un nigiri solo arroz", () => {
+    expect(implicitosEn(["Mirá cómo sellamos cada onigiri"])).toEqual(["arroz", "nori"])
+    expect(implicitosEn(["Nigiris de salmón"])).toEqual(["arroz"])
+    expect(implicitosEn(["Pedilo por WhatsApp"])).toEqual([])
+  })
+  it("en el control: el arroz de un onigiri no es un invento, el relleno sí", () => {
+    const r = respaldoDe({ ingredientes: { visibles: ["onigiri", "alga nori"], dudosos: ["atún"] }, texto: "Onigiri de atún con arroz" })
+    expect(ingredientesSinRespaldo(["Onigiri de atún con arroz"], r)).toEqual(["atún"])
+  })
+  it("queso crema visible respalda 'queso' a secas", () => {
+    const r = respaldoDe({ ingredientes: { visibles: ["queso crema"], dudosos: [] }, texto: "queso cremoso en cada corte" })
+    expect(ingredientesSinRespaldo(["queso cremoso en cada corte"], r)).toEqual([])
+  })
+  it("remolacha ya está en el vocabulario (la palabra por corte decía REMOLACHA sin verse)", () => {
+    expect(ingredientesEn("ROLL DE PALTA Y REMOLACHA")).toEqual(["palta", "remolacha"])
   })
 })
