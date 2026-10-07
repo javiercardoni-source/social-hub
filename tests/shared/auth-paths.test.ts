@@ -9,11 +9,14 @@ const { isPublicPath, rutaVitrina } = await import("../../src/lib/supabase/middl
 const { roleAtLeast } = await import("../../src/lib/cos/roles")
 
 describe("rutas públicas del proxy", () => {
-  it.each(["/login", "/sin-acceso", "/api/health", "/api/webhooks/meta", "/r/FF-ONI-0929"])("%s no pide sesión", (p) => {
-    expect(isPublicPath(p)).toBe(true)
-  })
+  it.each(["/login", "/sin-acceso", "/api/health", "/api/webhooks/meta", "/r/FF-ONI-0929", "/app/manifest.webmanifest", "/sw.js"])(
+    "%s no pide sesión",
+    (p) => {
+      expect(isPublicPath(p)).toBe(true)
+    },
+  )
 
-  it.each(["/", "/composer", "/media", "/api/webhooks", "/r", "/loginx", "/api/healthz", "/api/posts"])(
+  it.each(["/", "/composer", "/media", "/api/webhooks", "/r", "/loginx", "/api/healthz", "/api/posts", "/app", "/api/push"])(
     "%s sí pide sesión",
     (p) => {
       expect(isPublicPath(p)).toBe(false)

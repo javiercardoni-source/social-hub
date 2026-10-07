@@ -18,7 +18,9 @@ export async function login(formData: FormData) {
     return { error: "Email o contraseña incorrectos" }
   }
 
-  redirect("/inicio")
+  // Volver a /app si vino de ahí (la app de aprobación en el celular, F12). Solo rutas internas.
+  const next = formData.get("next") as string | null
+  redirect(next && /^\/[a-zA-Z0-9/_-]*$/.test(next) ? next : "/inicio")
 }
 
 export async function logout() {

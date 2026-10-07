@@ -12,6 +12,7 @@ import { NextResponse, type NextRequest } from "next/server"
  *  - /r/                 links cortos de «Comentá y te escribo» (los abre cualquiera)
  *  - /privacidad         política pública que exigen Google y Meta para sus apps
  *  - /manifest…, /icon…  para poder instalarla como app en el celular (el teléfono los pide sin sesión)
+ *  - /app/manifest.webmanifest, /sw.js  lo mismo para la app de aprobación (F12)
  *  - /vitrina/, /api/vitrina/  las vitrinas de anuncios (F11): web pública para compartir en Instagram
  */
 export const PUBLIC_PREFIXES = [
@@ -24,6 +25,8 @@ export const PUBLIC_PREFIXES = [
   "/manifest.webmanifest",
   "/icon",
   "/apple-icon",
+  "/app/manifest.webmanifest",
+  "/sw.js",
   "/vitrina/",
   "/api/vitrina/",
 ] as const
@@ -89,7 +92,9 @@ export async function updateSession(request: NextRequest) {
   if (!user) {
     const loginUrl = request.nextUrl.clone()
     loginUrl.pathname = "/login"
-    loginUrl.search = ""
+    // Vuelve adonde iba (clave para /app, F12: si la sesión vence, el ícono instalado tiene que
+    // reabrir la cola de aprobación, no el panel completo de escritorio).
+    loginUrl.search = `?next=${encodeURIComponent(pathname)}`
     return NextResponse.redirect(loginUrl)
   }
 

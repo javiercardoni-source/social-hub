@@ -38,13 +38,16 @@ export const getMember = cache(async (): Promise<Member | null> => {
 /**
  * Para páginas y acciones de servidor: sin sesión → /login; sin permiso → /sin-acceso.
  * La guía de datos de Next 16 pide verificar ACÁ y no confiar solo en el proxy.
+ *
+ * `volverA` (F12, la app de aprobación en /app): sin sesión, el login vuelve ahí en vez de a
+ * /inicio (si no, el login en el celular tira a Javier al panel de escritorio).
  */
-export async function requireMember(need: CosRole = "viewer"): Promise<Member> {
+export async function requireMember(need: CosRole = "viewer", volverA?: string): Promise<Member> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
+  if (!user) redirect(volverA ? `/login?next=${encodeURIComponent(volverA)}` : "/login")
 
   const member = await getMember()
   if (!member || !roleAtLeast(member.role, need)) redirect("/sin-acceso")
