@@ -288,26 +288,29 @@ export function AppAprobar(props: {
 
   return (
     <div className="flex h-full w-full flex-col" style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-      {/* Barra de arriba */}
-      <header className="flex shrink-0 items-center gap-2 overflow-x-auto px-3 pb-2 pt-2">
-        <button
-          type="button"
-          onClick={() => cambiarMarca("")}
-          className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", !props.marcaActual ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
-        >
-          Todas
-        </button>
-        {props.marcas.map((m) => (
+      {/* Barra de arriba: los chips de marca se deslizan en su propia franja; el contador y la
+          campana de avisos quedan siempre a la vista (si no, con marcas largas se iban de pantalla). */}
+      <header className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           <button
-            key={m.slug}
             type="button"
-            onClick={() => cambiarMarca(m.slug)}
-            className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", props.marcaActual === m.slug ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
+            onClick={() => cambiarMarca("")}
+            className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", !props.marcaActual ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
           >
-            {m.name}
+            Todas
           </button>
-        ))}
-        <span className="ml-auto shrink-0 text-xs font-semibold tabular-nums text-white/70">
+          {props.marcas.map((m) => (
+            <button
+              key={m.slug}
+              type="button"
+              onClick={() => cambiarMarca(m.slug)}
+              className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", props.marcaActual === m.slug ? "border-white bg-white text-black" : "border-white/30 text-white/70")}
+            >
+              {m.name}
+            </button>
+          ))}
+        </div>
+        <span className="shrink-0 text-xs font-semibold tabular-nums text-white/70">
           {cola.length > 0 ? `${totalInicial - cola.length + 1} / ${totalInicial}` : `${totalInicial} / ${totalInicial}`}
         </span>
         <button

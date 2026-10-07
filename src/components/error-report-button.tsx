@@ -168,7 +168,9 @@ export function ErrorReportButton() {
     }
   }, [note, screenshot, attachments, reset]);
 
-  if (pathname === "/login") return null;
+  // F12: /app es la app de aprobación a pantalla completa (sin esto ni nada más encima); el
+  // botón, además, queda justo donde se desliza para aprobar/rechazar.
+  if (pathname === "/login" || pathname.startsWith("/app")) return null;
 
   const busy = sending || attaching;
 
