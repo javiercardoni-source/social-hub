@@ -129,6 +129,11 @@ Cada etapa recorre: **IMPLEMENT → TEST → CRITIC → FIX → REGRESSION → V
    están rehaciendo: lo que se ve cambiaría enseguida). `cargarAprobaciones(brand, { soloListas: true })`.
    La web sigue mostrando lo trabado.
 
+5. **Motivo «Ingredientes incorrectos» (07-10, 19:48, desde la app):** chip nuevo en el panel de rechazo
+   (catálogo compartido `shared/cos/rechazos.ts`, también en la web); su lección le llega a la IA en cada
+   texto («ingredientes nombrados que no estaban en la imagen»). Verificado en prod abriendo y cancelando
+   el panel: 59 rechazados antes y después.
+
 ## Nota de proceso (07-10)
 El repaso de "UX Critic (celular)" de esta ronda se hizo directo (Playwright, perfil iPhone 15,
 contra producción, sesión real) en vez de delegarlo a un subagente aparte — el entorno de esta
