@@ -374,20 +374,35 @@ export function AppAprobar(props: {
             {cola[1] && <div className="absolute inset-3 rounded-3xl bg-white/10" style={{ transform: "translateY(8px) scale(0.97)" }} />}
 
             <div
-              className="absolute inset-3 touch-none select-none overflow-hidden rounded-3xl bg-neutral-900 shadow-2xl"
+              className="absolute inset-3 flex touch-none select-none flex-col overflow-hidden rounded-3xl bg-neutral-900 shadow-2xl"
               style={estiloTarjeta}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerUp}
             >
-              <TarjetaMedia t={actual} videoRef={videoRef} />
-
-              {/* Sellos de APROBAR / RECHAZAR mientras se arrastra */}
-              {pos.x > 24 && <Sello texto="APROBAR" color="border-emerald-400 text-emerald-400" style={{ opacity: Math.min(1, pos.x / UMBRAL), left: 20 }} />}
-              {pos.x < -24 && <Sello texto="RECHAZAR" color="border-red-400 text-red-400" style={{ opacity: Math.min(1, -pos.x / UMBRAL), right: 20 }} />}
-
-              <InfoTarjeta t={actual} />
+              {/* Post y carrusel son fotos 4:5 con el diseño (título, marca) ya pintado adentro;
+                  si la tarjeta es más alta que la foto (letterbox), la info de acá abajo no se
+                  superpone — va DEBAJO, no encima (si no, tapaba el título de la pieza). Reel e
+                  historia son video/foto 9:16 que llenan la tarjeta entera: ahí sí va de overlay,
+                  como las historias de Instagram. */}
+              {actual.postType === "feed" || actual.postType === "carousel" ? (
+                <>
+                  <div className="relative min-h-0 flex-1 bg-black">
+                    <TarjetaMedia t={actual} videoRef={videoRef} />
+                    {pos.x > 24 && <Sello texto="APROBAR" color="border-emerald-400 text-emerald-400" style={{ opacity: Math.min(1, pos.x / UMBRAL), left: 20 }} />}
+                    {pos.x < -24 && <Sello texto="RECHAZAR" color="border-red-400 text-red-400" style={{ opacity: Math.min(1, -pos.x / UMBRAL), right: 20 }} />}
+                  </div>
+                  <InfoTarjeta t={actual} variante="debajo" />
+                </>
+              ) : (
+                <>
+                  <TarjetaMedia t={actual} videoRef={videoRef} />
+                  {pos.x > 24 && <Sello texto="APROBAR" color="border-emerald-400 text-emerald-400" style={{ opacity: Math.min(1, pos.x / UMBRAL), left: 20 }} />}
+                  {pos.x < -24 && <Sello texto="RECHAZAR" color="border-red-400 text-red-400" style={{ opacity: Math.min(1, -pos.x / UMBRAL), right: 20 }} />}
+                  <InfoTarjeta t={actual} variante="overlay" />
+                </>
+              )}
 
               {busy && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40">
@@ -508,11 +523,23 @@ function TarjetaMedia({ t, videoRef }: { t: Tarjeta; videoRef: React.RefObject<H
   )
 }
 
-function InfoTarjeta({ t }: { t: Tarjeta }) {
+/**
+ * "overlay" (reel/historia, video o foto 9:16 que llena la tarjeta): franja con degradé ENCIMA,
+ * como las historias de Instagram. "debajo" (post/carrusel, foto 4:5 con el diseño ya adentro):
+ * panel sólido DEBAJO de la foto, en el espacio que deja el letterbox — nunca tapa el diseño.
+ */
+function InfoTarjeta({ t, variante }: { t: Tarjeta; variante: "overlay" | "debajo" }) {
   const textoBase = t.caption.trim() || t.overlayText.trim()
   const [abierto, setAbierto] = useState(false)
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent px-4 pb-4 pt-10">
+    <div
+      className={cn(
+        "px-4 pb-4",
+        variante === "overlay"
+          ? "pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent pt-10"
+          : "shrink-0 border-t border-white/10 bg-neutral-900 pt-3",
+      )}
+    >
       <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
         <span className="flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5">
           <PlatformIcon platform={t.platform} className="h-3 w-3" /> {TIPO_LABEL[t.postType]}
