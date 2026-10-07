@@ -334,11 +334,15 @@ export async function cancelarPost(postId: string) {
   await requireMember("editor")
   const db = createAdminClient()
 
-  const { error } = await db
+  // Lo publicado no se cancela (se borra de la red con pedirBorrado); lo que se está publicando, tampoco.
+  const { data, error } = await db
     .from("cos_posts")
     .update({ status: "CANCELLED" })
     .eq("id", postId)
+    .not("status", "in", "(PUBLISHED,PUBLISHING,CANCELLED)")
+    .select("id")
   if (error) throw aviso(`No se pudo cancelar: ${error.message}`)
+  if (!data?.length) throw aviso("Esta publicación ya no se puede cancelar")
 
   revalidatePath("/aprobaciones")
   revalidatePath("/inicio")
@@ -353,9 +357,9 @@ export async function volverAAprobacion(postId: string) {
   const { data, error } = await db
     .from("cos_posts")
     // Vuelve sin horario ni candado: se elige de nuevo al aprobar (o lo ubica la agenda).
-    .update({ status: "PENDING_APPROVAL", scheduled_at: null, window_start: null, window_end: null, schedule_lock: false, schedule_source: null, schedule_reason: null })
+    .update({ status: "PENDING_APPROVAL", approved_by: null, approved_at: null, scheduled_at: null, window_start: null, window_end: null, schedule_lock: false, schedule_source: null, schedule_reason: null })
     .eq("id", postId)
-    .in("status", ["FAILED", "MISSED", "EXPIRED", "SCHEDULED", "RETRY_SCHEDULED", "PAUSED"])
+    .in("status", ["FAILED", "MISSED", "EXPIRED", "APPROVED", "SCHEDULED", "RETRY_SCHEDULED", "PAUSED"])
     .select("id")
   if (error) throw aviso(`No se pudo devolver a aprobación: ${error.message}`)
   if (!data?.length) throw aviso("Este post ya no se puede devolver a aprobación")

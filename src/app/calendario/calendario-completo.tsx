@@ -3,9 +3,11 @@
 import { useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Search, SlidersHorizontal, X } from "lucide-react"
+import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, Loader2, Search, SlidersHorizontal, Trash2, Undo2, X } from "lucide-react"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { elegirMarca } from "@/lib/cos/brand-actions"
+import { cancelarPost, pedirBorrado, volverAAprobacion } from "@/lib/cos/actions"
+import { explicarError } from "@/lib/ui-errors"
 import type { EstadoCal, FechaCal, PiezaCal } from "@/lib/cos/calendario-datos"
 import type { Campania } from "../../../shared/cos/campanias"
 import { RitmoMarca } from "../(dashboard)/calendar/ritmo-marca"
@@ -357,6 +359,76 @@ function VistaHoras(props: VistaProps) {
   )
 }
 
+/**
+ * Lo que se puede hacer con la pieza desde el calendario:
+ *   propuesta → descartarla (no sale)
+ *   aprobada / en pausa / con problema → volver a Aprobaciones (sin hora) o cancelarla
+ *   publicada → borrarla de la red (el worker la baja de Instagram o Facebook)
+ */
+function Acciones({ p, onListo }: { p: PiezaCal; onListo: () => void }) {
+  const router = useRouter()
+  const [pending, start] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+  const red = p.plataforma === "instagram" ? "Instagram" : "Facebook"
+  const run = (pregunta: string, fn: () => Promise<void>, refrescos: number[] = []) => {
+    if (!confirm(pregunta)) return
+    setError(null)
+    start(async () => {
+      try {
+        await fn()
+        router.refresh()
+        for (const ms of refrescos) {
+          await new Promise((r) => setTimeout(r, ms))
+          router.refresh()
+        }
+        onListo()
+      } catch (e) {
+        setError(explicarError(e))
+      }
+    })
+  }
+  const boton = "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50"
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <div className="flex flex-wrap gap-2">
+        {p.estado === "propuesta" && (
+          <button type="button" disabled={pending} className={cn(boton, "border-red-200 text-red-700 hover:bg-red-50")} onClick={() => run("¿Descartar esta pieza? No va a salir y deja de estar en Aprobaciones.", () => cancelarPost(p.id))}>
+            <Trash2 className="h-4 w-4" /> Descartar
+          </button>
+        )}
+        {["aprobada", "pausada", "problema"].includes(p.estado) && (
+          <>
+            <button type="button" disabled={pending} className={cn(boton, "hover:bg-gray-50")} onClick={() => run("¿Sacarla del calendario? Vuelve a Aprobaciones sin hora, y la agenda le propone una nueva.", () => volverAAprobacion(p.id))}>
+              <Undo2 className="h-4 w-4" /> Sacar del calendario y volver a aprobar
+            </button>
+            <button type="button" disabled={pending} className={cn(boton, "border-red-200 text-red-700 hover:bg-red-50")} onClick={() => run("¿Cancelar esta publicación? No va a salir.", () => cancelarPost(p.id))}>
+              <Trash2 className="h-4 w-4" /> Cancelar
+            </button>
+          </>
+        )}
+        {p.estado === "publicada" &&
+          (p.borrando ? (
+            <span className="flex items-center gap-1.5 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Borrando de {red}…
+            </span>
+          ) : (
+            <button
+              type="button"
+              disabled={pending}
+              className={cn(boton, "border-red-200 text-red-700 hover:bg-red-50")}
+              onClick={() => run(`¿Borrar esta publicación de ${red}? La gente ya no la va a ver. No se puede deshacer.`, () => pedirBorrado(p.id), [3000, 5000])}
+            >
+              <Trash2 className="h-4 w-4" /> {p.borrarError ? "Reintentar el borrado" : `Borrar de ${red}`}
+            </button>
+          ))}
+        {pending && <Loader2 className="h-4 w-4 animate-spin self-center text-gray-400" />}
+      </div>
+      {p.borrarError && <p className="text-xs text-red-600">No se pudo borrar: {p.borrarError}. Probá de nuevo o borrala desde la app.</p>}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </div>
+  )
+}
+
 function Detalle({ p, onCerrar }: { p: PiezaCal; onCerrar: () => void }) {
   return (
     <div className="fixed inset-0 z-30 flex justify-end bg-black/20" onClick={onCerrar}>
@@ -382,7 +454,7 @@ function Detalle({ p, onCerrar }: { p: PiezaCal; onCerrar: () => void }) {
           </p>
           {p.porque && p.estado !== "publicada" && <p className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">{p.porque}</p>}
           {p.texto && <p className="whitespace-pre-wrap text-gray-700">{p.texto}</p>}
-          <div className="flex gap-2 pt-2">
+          <div className="flex flex-wrap gap-2 pt-2">
             {p.estado === "propuesta" && (
               <a href="/aprobaciones" target="_blank" rel="noreferrer" className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700">
                 Ir a aprobar
@@ -394,6 +466,7 @@ function Detalle({ p, onCerrar }: { p: PiezaCal; onCerrar: () => void }) {
               </a>
             )}
           </div>
+          <Acciones p={p} onListo={onCerrar} />
         </div>
       </aside>
     </div>

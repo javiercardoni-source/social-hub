@@ -26,6 +26,9 @@ export type PiezaCal = {
   porque: string | null
   permalink: string | null
   marca: { name: string; color: string } | null
+  /** Se pidió borrarla de la red y el worker todavía no confirmó (o falló: borrarError). */
+  borrando: boolean
+  borrarError: string | null
 }
 export type FechaCal = { dia: string; nombre: string; feriado: boolean }
 
@@ -40,6 +43,8 @@ type Row = {
   permalink: string | null
   render_key: string | null
   schedule_reason: string | null
+  delete_requested_at: string | null
+  delete_error: string | null
   cos_brands: { name: string; color: string } | null
   cos_post_media: { position: number; cos_asset_versions: { cos_assets: { thumb_key: string | null } | null } | null }[]
 }
@@ -53,7 +58,7 @@ export async function cargarCalendario(brand: ActiveBrand | null, desdeDia: stri
   let q = db
     .from("cos_posts")
     .select(
-      `id, platform, post_type, status, caption, scheduled_at, published_at, permalink, render_key, schedule_reason,
+      `id, platform, post_type, status, caption, scheduled_at, published_at, permalink, render_key, schedule_reason, delete_requested_at, delete_error,
        cos_brands(name, color),
        cos_post_media(position, cos_asset_versions(cos_assets!cos_asset_versions_asset_id_fkey(thumb_key)))`,
     )
@@ -105,6 +110,8 @@ export async function cargarCalendario(brand: ActiveBrand | null, desdeDia: stri
       porque: p.schedule_reason,
       permalink: p.permalink,
       marca: brand ? null : p.cos_brands,
+      borrando: !!p.delete_requested_at && !p.delete_error,
+      borrarError: p.delete_error,
     })
   }
   piezas.sort((a, b) => a.dia.localeCompare(b.dia) || a.minutos - b.minutos)
