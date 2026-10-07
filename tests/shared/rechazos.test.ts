@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { leccionesDeRechazos, validarRechazo } from "../../shared/cos/rechazos"
+import { MOTIVOS, leccionesDeRechazos, validarRechazo } from "../../shared/cos/rechazos"
 
 describe("rechazos con motivo", () => {
   it("pide al menos un motivo o una explicación", () => {
@@ -18,5 +18,14 @@ describe("rechazos con motivo", () => {
     expect(r).toContain("«Muy formal, hablale como a un amigo» (sobre: \"Estimado cliente, le ofrecemos\")")
     expect(r.match(/hablale/gi)?.length).toBe(1)
     expect(leccionesDeRechazos([])).toBe("")
+  })
+})
+
+describe("motivo «Ingredientes incorrectos» (Javier, 07-10-2026)", () => {
+  it("existe, vale como motivo y llega a la IA como lección", () => {
+    expect(MOTIVOS.some((m) => m.id === "ingredientes" && m.label === "Ingredientes incorrectos")).toBe(true)
+    expect(validarRechazo(["ingredientes"], "")).toBeNull()
+    const l = leccionesDeRechazos([{ reasons: ["ingredientes"], note: null, post_type: "reel", caption: "Roll de atún", overlay_text: null, at: "2026-10-07T10:00:00Z" }])
+    expect(l).toContain("ingredientes nombrados que no estaban en la imagen (1)")
   })
 })

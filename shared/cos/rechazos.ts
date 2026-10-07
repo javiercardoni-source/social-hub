@@ -10,6 +10,7 @@ export const MOTIVOS = [
   { id: "texto", label: "El texto no me gusta", leccion: "textos que no le gustaron" },
   { id: "voz", label: "No suena a la marca", leccion: "textos que no sonaban a la marca" },
   { id: "dato", label: "Dato equivocado (precio, combo, horario)", leccion: "datos equivocados (precio, combo u horario)" },
+  { id: "ingredientes", label: "Ingredientes incorrectos", leccion: "ingredientes nombrados que no estaban en la imagen" },
   { id: "frase", label: "La frase sobre la imagen", leccion: "frases sobre la imagen que no funcionaron" },
   { id: "foto", label: "La foto o el video no sirve", leccion: "material que no sirve" },
   { id: "diseno", label: "El diseño tapa o queda mal", leccion: "diseños que tapaban el producto o quedaban mal" },
