@@ -28,6 +28,8 @@ import {
   primerTurno,
   abreEseDia,
   validarPropuesta,
+  leerRitmo,
+  HORIZONTE_DIAS,
   historiaDeClima,
   CONSIGNAS_CLIMA,
   type Apertura,
@@ -192,6 +194,7 @@ const aprenderAgenda: Handler = async (_job, { db, log }) => {
 
 type PostPlan = {
   id: string
+  created_at: string
   account_id: string
   status: string
   post_type: Format
@@ -216,10 +219,12 @@ async function climaFuturo(db: SupabaseClient): Promise<Map<string, ClimaCat>> {
 }
 
 export async function reglasDeMarca(db: SupabaseClient, brandId: string, clima?: Map<string, ClimaCat>, feriados?: Set<string>): Promise<Reglas> {
-  const { data: b } = await db.from("cos_brands").select("open_hours, rules_json").eq("id", brandId).single()
+  const { data: b } = await db.from("cos_brands").select("open_hours, rules_json, ritmo").eq("id", brandId).single()
   return {
     desde: new Date(),
-    dias: 7,
+    // Una temporada (07-10-2026): con el ritmo de la marca, la agenda llena semana por semana.
+    dias: HORIZONTE_DIAS,
+    ritmo: leerRitmo(b?.ritmo),
     horaMin: 9,
     horaMax: 22,
     apertura: normalizarApertura(b?.open_hours),
@@ -232,7 +237,7 @@ export async function reglasDeMarca(db: SupabaseClient, brandId: string, clima?:
 
 /** Pieza del asignador a partir de un post (feriado y clima tienen día fijo). */
 function aPieza(p: PostPlan): Pieza {
-  const pieza: Pieza = { id: p.id, account: p.account_id, format: p.post_type, actual: p.scheduled_at }
+  const pieza: Pieza = { id: p.id, account: p.account_id, format: p.post_type, actual: p.scheduled_at, creada: p.created_at }
   const m = /^(feriado|clima):(\d{4}-\d{2}-\d{2})/.exec(p.campaign ?? "")
   if (m) {
     pieza.dia = m[2]
@@ -261,7 +266,7 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     const reglas = await reglasDeMarca(db, b.id, clima, feriados)
     const { data: posts, error } = await db
       .from("cos_posts")
-      .select("id, account_id, status, post_type, campaign, scheduled_at, window_start, window_end, schedule_lock, schedule_source, schedule_reason, schedule_log, cos_social_accounts(platform), cos_post_media(position, cos_asset_versions(asset_id))")
+      .select("id, created_at, account_id, status, post_type, campaign, scheduled_at, window_start, window_end, schedule_lock, schedule_source, schedule_reason, schedule_log, cos_social_accounts(platform), cos_post_media(position, cos_asset_versions(asset_id))")
       .eq("brand_id", b.id)
       .in("status", ["PENDING_APPROVAL", "APPROVED", "SCHEDULED", "PAUSED", "RETRY_SCHEDULED", "PUBLISHING", "PUBLISHED"])
       .is("deleted_at", null)
@@ -319,7 +324,10 @@ const planearAgenda: Handler = async (job, { db, log }) => {
           db,
           model: s.ai_model,
           brand,
-          plan: plan.map((a) => ({ post_id: a.id, formato: piezas.find((x) => x.id === a.id)!.format, at: a.at, porque: a.porque, fijo: !!piezas.find((x) => x.id === a.id)!.dia })),
+          // El agente mira solo las próximas 2 semanas (con clima y fechas cercanas); lo demás es del motor.
+          plan: plan
+            .filter((a) => Date.parse(a.at) < Date.now() + 14 * 24 * HORA)
+            .map((a) => ({ post_id: a.id, formato: piezas.find((x) => x.id === a.id)!.format, at: a.at, porque: a.porque, fijo: !!piezas.find((x) => x.id === a.id)!.dia })),
           efectos: m0.efectos.filter((e) => e.claro),
           clima: resumenClima(clima),
           fechas: await proximasFechas(db, b.id),

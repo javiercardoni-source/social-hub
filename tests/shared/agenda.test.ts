@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  semanaBA,
+  leerRitmo,
   huecoConReglas,
   chocaConReglas,
   abreEseDia,
@@ -372,5 +374,37 @@ describe("aprobar a mano respeta las reglas de la cuenta (07-10-2026)", () => {
     const ocupados = [{ account: cta, format: "reel" as const, at: "2026-10-06T22:00:00Z" }]
     expect(chocaConReglas({ account: cta, format: "reel" }, at("2026-10-06T22:00:00Z"), ocupados)).toMatch(/un post|cerca/)
     expect(chocaConReglas({ account: cta, format: "story" }, at("2026-10-06T22:00:00Z"), ocupados)).toBeNull()
+  })
+})
+
+
+describe("agenda a 3 meses con ritmo (07-10-2026)", () => {
+  const post = (id: string, n: number): Pieza => ({ id, account: "ig", format: "reel", creada: `2026-10-0${1 + (n % 5)}T0${n % 10}:00:00Z` })
+  it("5 por semana: llena en orden, sin semanas vacías y sin pasarse del ritmo", () => {
+    const piezas = Array.from({ length: 30 }, (_, i) => post(`p${String(i).padStart(2, "0")}`, i))
+    const t0 = Date.now()
+    const { asignadas, sinLugar } = asignar(piezas, plano, [], reglas({ dias: 90, ritmo: { postsSemana: 5, historiasDia: 3 } }))
+    expect(Date.now() - t0).toBeLessThan(3000)
+    expect(sinLugar).toEqual([])
+    const porSemana = new Map<string, number>()
+    for (const a of asignadas) porSemana.set(semanaBA(new Date(a.at)), (porSemana.get(semanaBA(new Date(a.at))) ?? 0) + 1)
+    const semanas = [...porSemana.keys()].sort()
+    expect(Math.max(...porSemana.values())).toBeLessThanOrEqual(5)
+    // 30 piezas a 5 por semana = 6 semanas seguidas (la primera puede ser parcial: 7).
+    expect(semanas.length).toBeLessThanOrEqual(7)
+    for (let i = 1; i < semanas.length; i++) expect(Date.parse(semanas[i]) - Date.parse(semanas[i - 1])).toBe(7 * 86_400_000)
+    // Un post por día como máximo.
+    const dias = asignadas.map((a) => enBA(new Date(a.at)).dia)
+    expect(new Set(dias).size).toBe(dias.length)
+  })
+  it("150 piezas en 90 días no tarda", () => {
+    const piezas = Array.from({ length: 150 }, (_, i) => ({ ...post(`q${i}`, i), account: i % 2 ? "ig" : "fb", format: (i % 3 ? "reel" : "story") as Pieza["format"] }))
+    const t0 = Date.now()
+    asignar(piezas, plano, [], reglas({ dias: 90, ritmo: { postsSemana: 5, historiasDia: 3 } }))
+    expect(Date.now() - t0).toBeLessThan(5000)
+  })
+  it("el ritmo se lee con límites razonables", () => {
+    expect(leerRitmo(null)).toEqual({ postsSemana: 5, historiasDia: 3 })
+    expect(leerRitmo({ postsSemana: 40, historiasDia: 0 })).toEqual({ postsSemana: 14, historiasDia: 1 })
   })
 })

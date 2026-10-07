@@ -50,6 +50,7 @@ import {
 import { BLOCKING_RISK_FLAGS, type BrandContext } from "../../shared/cos/prompts.ts"
 import { resumenEstilo, type FichaRef, type Para } from "../../shared/cos/estilo.ts"
 import { leccionesDeRechazos } from "../../shared/cos/rechazos.ts"
+import { campaniasParaIA, type Campania } from "../../shared/cos/campanias.ts"
 import { fullCaption } from "../../shared/cos/caption.ts"
 import { DIAS_ANTICIPACION, campaniaFeriado, consignaFeriado, diasAntesDe, horaBA, planFeriado } from "../../shared/cos/feriados.ts"
 import { openDays } from "../../shared/cos/timing.ts"
@@ -136,7 +137,10 @@ export async function brandContext(db: SupabaseClient, brandId: string): Promise
   const lecciones = leccionesDeRechazos(
     (rech ?? []).map((r) => ({ reasons: r.reject_reasons ?? [], note: r.reject_note, post_type: r.post_type, caption: r.caption, overlay_text: r.overlay_text, at: r.rejected_at as string })),
   )
-  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones, ritmoReel, karaoke: !!b.reel_karaoke }
+  // Campañas vigentes y próximas (temporada, fecha comercial, propias): dan el tema de la época.
+  const { data: camps } = await db.from("cos_campaigns").select("*").eq("brand_id", brandId).eq("activa", true).gte("hasta", arDay(new Date()))
+  const campanias = campaniasParaIA((camps ?? []) as Campania[], arDay(new Date()))
+  return { name: b.name, slug: b.slug, toneMd: b.tone_md, rules: b.rules_json ?? {}, vigentes, estilos: { post: de("post"), reel: de("reel"), historia: de("historia") }, lecciones, ritmoReel, karaoke: !!b.reel_karaoke, campanias }
 }
 
 type AssetRow = {

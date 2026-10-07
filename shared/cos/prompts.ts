@@ -22,6 +22,8 @@ export type BrandContext = {
   ritmoReel?: "normal" | "rafaga"
   /** Palabra por corte (estilo karaoke): opción de la marca (cos_brands.reel_karaoke). */
   karaoke?: boolean
+  /** Campañas vigentes y próximas (shared/cos/campanias.ts → campaniasParaIA). "" = ninguna. */
+  campanias?: string
 }
 
 /** Alertas que puede levantar el clasificador. Las dos primeras bloquean la publicación. */
@@ -50,6 +52,12 @@ export function brandSystemPrompt(b: BrandContext): string {
     vigentes ? "" : `Horario real de atención: ${horario}.`,
     vigentes
       ? "DATOS COMERCIALES VIGENTES (cargados por el dueño; son la ÚNICA fuente de precios, combos, promos, horarios, zonas y links):\n" + vigentes
+      : "",
+    b.campanias?.trim()
+      ? "\nCAMPAÑAS DE LA MARCA (dan el tema, la idea y el tono de esta época; si la pieza encaja, alineala con la vigente, " +
+        "o anticipá la próxima si falta poco). Una campaña NUNCA habilita precios, descuentos ni promos: esos salen solo de los datos vigentes " +
+        "(un Black Friday sin promo cargada no tiene descuento):\n" +
+        b.campanias.trim()
       : "",
     "",
     "Reglas duras (no se negocian):",

@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { PlatformIcon } from "@/components/ui/platform-icon"
 import { Clock, CheckCircle, AlertCircle, XCircle, ExternalLink, Images } from "lucide-react"
 import { AccionesPost } from "./acciones-post"
+import { VistaMes } from "./mes"
 import { AgregarFecha, BorrarFecha } from "./fechas"
 import { isDeliveryDay, weatherText } from "../../../../shared/cos/special-days"
 
@@ -58,8 +59,46 @@ function when(iso: string | null) {
   return new Date(iso).toLocaleString("es-AR", { timeZone: AR, weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
 }
 
-export default async function CalendarioPage() {
+/** Mes de hoy en Buenos Aires (fuera del componente: la hora actual no es "pura"). */
+const mesActual = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 7)
+
+/** Mes (la grilla con la agenda y las campañas) o Lista (lo programado y publicado, con acciones). */
+function Vistas({ actual }: { actual: "mes" | "lista" }) {
+  return (
+    <div className="flex gap-1 rounded-full border p-0.5 text-sm">
+      {(
+        [
+          ["mes", "Mes", "/calendar"],
+          ["lista", "Lista", "/calendar?vista=lista"],
+        ] as const
+      ).map(([id, label, href]) => (
+        <Link key={id} href={href} className={`rounded-full px-3 py-1 font-semibold ${actual === id ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}>
+          {label}
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+export default async function CalendarioPage({ searchParams }: { searchParams: Promise<{ vista?: string; mes?: string }> }) {
   await requireMember("viewer")
+  const { vista, mes } = await searchParams
+  if (vista === "lista") return <ListaCalendario />
+  const hoy = mesActual()
+  const elegido = mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes) ? mes : hoy
+  return (
+    <>
+      <PageHeader title="Calendario" description="La agenda mira 3 meses: lo que propone, lo aprobado y lo publicado, con las campañas de cada época">
+        <Vistas actual="mes" />
+      </PageHeader>
+      <div className="p-4 md:p-6">
+        <VistaMes mes={elegido} />
+      </div>
+    </>
+  )
+}
+
+async function ListaCalendario() {
   const brand = await getActiveBrand()
   const db = createAdminClient()
 
@@ -213,7 +252,9 @@ export default async function CalendarioPage() {
       <PageHeader
         title="Calendario"
         description={`${upcoming.length} por salir · ${published.length} publicados${problems.length ? ` · ${problems.length} con problemas` : ""}${brand ? ` · ${brand.name}` : ""}`}
-      />
+      >
+        <Vistas actual="lista" />
+      </PageHeader>
       <div className="space-y-8 p-4 md:p-6">
         {plan && (
           <section className="space-y-2">

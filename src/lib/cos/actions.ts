@@ -5,7 +5,7 @@ import { plantilla } from "../../../shared/cos/plantillas"
 import { normalizarExcluidos } from "../../../shared/cos/reel"
 
 import { TANDAS, TIPOS, carpetaDeLink, type TipoTanda } from "../../../shared/cos/base-fotos"
-import { chocaConReglas, horaHistoriaManual, huecoConReglas, type Formato } from "../../../shared/cos/agenda"
+import { chocaConReglas, horaHistoriaManual, huecoConReglas, leerRitmo, type Formato } from "../../../shared/cos/agenda"
 import { aviso } from "@/lib/aviso"
 import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
@@ -150,7 +150,8 @@ export async function editarPost(
  */
 /** Lo aprobado o publicado de una cuenta alrededor de una fecha (para las reglas de la agenda). */
 async function ocupadosDeCuenta(db: ReturnType<typeof createAdminClient>, accountId: string, sinPost: string, cerca: Date) {
-  const desde = new Date(cerca.getTime() - 2 * 24 * 3600_000).toISOString()
+  // Una semana para atrás y 120 días para adelante: el ritmo es semanal y la búsqueda de hueco puede ir lejos.
+  const desde = new Date(cerca.getTime() - 8 * 24 * 3600_000).toISOString()
   const { data: otros } = await db
     .from("cos_posts")
     .select("post_type, scheduled_at, published_at")
@@ -179,7 +180,8 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
     // La hora de la agenda puede haber quedado vieja (otra pieza ya aprobada tomó ese lugar): se
     // verifica contra lo aprobado de la cuenta con las mismas reglas; si choca, la agenda recalcula.
     const ocupadosMotor = await ocupadosDeCuenta(db, p.account_id, postId, new Date(p.scheduled_at))
-    const choque = chocaConReglas({ account: p.account_id, format: p.post_type as Formato }, new Date(p.scheduled_at), ocupadosMotor)
+    const { data: marca } = await db.from("cos_brands").select("ritmo").eq("id", p.brand_id).single()
+    const choque = chocaConReglas({ account: p.account_id, format: p.post_type as Formato }, new Date(p.scheduled_at), ocupadosMotor, leerRitmo(marca?.ritmo))
     if (choque) {
       await db.rpc("cos_enqueue_job", { p_type: "agenda:plan", p_payload: { brand_id: p.brand_id }, p_run_at: new Date(Date.now() - 3600_000).toISOString(), p_dedupe_key: `agenda:plan:${p.brand_id}:aprobar:${Math.floor(Date.now() / 60_000)}` })
       throw aviso(`Ese horario ya no sirve (${choque}): la agenda lo está recalculando. Recargá en un minuto y aprobá con la hora nueva.`)
@@ -201,7 +203,8 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
   // por vencido mientras se aprueba; igual se encola ya mismo (abajo).
   const pedido = target && target.getTime() > Date.now() + 2 * 60_000 ? target : new Date(Date.now() + 2 * 60_000)
   // Freno anti-ráfaga: la misma cuenta no publica dos piezas más cerca de lo que pide la agenda.
-  const { data: yo } = await db.from("cos_posts").select("account_id, post_type").eq("id", postId).single()
+  const { data: yo } = await db.from("cos_posts").select("account_id, post_type, cos_brands(ritmo)").eq("id", postId).single()
+  const ritmo = leerRitmo((yo?.cos_brands as unknown as { ritmo: unknown } | null)?.ritmo)
   const ocupados = await ocupadosDeCuenta(db, yo?.account_id ?? "", postId, pedido)
   // Historia de una subida: si cae pegada a su reel/post de Instagram (misma cuenta y archivo), va 90 min después.
   let deseado = pedido
@@ -220,7 +223,7 @@ export async function aprobarPost(postId: string, cuando: string | null | "motor
     }
   }
   // Respeta el máximo por día y el horario (9 a 22); una hora elegida puntualmente se respeta si no choca.
-  const hueco = huecoConReglas({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, deseado, ocupados, { horaElegida: !!target && target.getTime() > Date.now() + 2 * 60_000 })
+  const hueco = huecoConReglas({ account: yo?.account_id ?? "", format: (yo?.post_type ?? "feed") as Formato }, deseado, ocupados, { horaElegida: !!target && target.getTime() > Date.now() + 2 * 60_000, ritmo })
   const historiaCorrida = deseado.getTime() !== pedido.getTime()
   const publishNow = !hueco.corrido && !historiaCorrida && (!target || target.getTime() <= Date.now() + 2 * 60_000)
   const horaFinal = hueco.at
