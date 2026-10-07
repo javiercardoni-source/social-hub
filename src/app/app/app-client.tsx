@@ -389,7 +389,7 @@ export function AppAprobar(props: {
               {actual.postType === "feed" || actual.postType === "carousel" ? (
                 <>
                   <div className="relative min-h-0 flex-1 bg-black">
-                    <TarjetaMedia t={actual} videoRef={videoRef} />
+                    <TarjetaMedia key={actual.id} t={actual} videoRef={videoRef} />
                     {pos.x > 24 && <Sello texto="APROBAR" color="border-emerald-400 text-emerald-400" style={{ opacity: Math.min(1, pos.x / UMBRAL), left: 20 }} />}
                     {pos.x < -24 && <Sello texto="RECHAZAR" color="border-red-400 text-red-400" style={{ opacity: Math.min(1, -pos.x / UMBRAL), right: 20 }} />}
                   </div>
@@ -397,7 +397,7 @@ export function AppAprobar(props: {
                 </>
               ) : (
                 <>
-                  <TarjetaMedia t={actual} videoRef={videoRef} />
+                  <TarjetaMedia key={actual.id} t={actual} videoRef={videoRef} />
                   {pos.x > 24 && <Sello texto="APROBAR" color="border-emerald-400 text-emerald-400" style={{ opacity: Math.min(1, pos.x / UMBRAL), left: 20 }} />}
                   {pos.x < -24 && <Sello texto="RECHAZAR" color="border-red-400 text-red-400" style={{ opacity: Math.min(1, -pos.x / UMBRAL), right: 20 }} />}
                   <InfoTarjeta t={actual} variante="overlay" />
@@ -513,16 +513,35 @@ function Sello({ texto, color, style }: { texto: string; color: string; style: R
 
 function TarjetaMedia({ t, videoRef }: { t: Tarjeta; videoRef: React.RefObject<HTMLVideoElement | null> }) {
   const src = srcDe(t)
+  const esVid = esVideo(t) && !!src
+  const localRef = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    if (!esVid) return
+    const v = localRef.current
+    videoRef.current = v // así el efecto del padre (play al mostrarla) lo encuentra
+    return () => {
+      // Soltar el decodificador ANTES de que el navegador saque este video del DOM: en iOS, si no
+      // se hace a mano, después de varios reels seguidos no quedan decodificadores libres y el
+      // siguiente queda colgado hasta cerrar y volver a abrir la app (key={t.id} en el padre ya
+      // evita que se reutilice el mismo <video>; esto es lo que faltaba).
+      if (v) {
+        v.pause()
+        v.removeAttribute("src")
+        v.load()
+      }
+      if (videoRef.current === v) videoRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- videoRef es el useRef estable del padre
+  }, [esVid])
+
   if (!src) return <div className="absolute inset-0 flex items-center justify-center text-sm text-white/40">Sin archivo</div>
-  if (esVideo(t)) {
-    // key={t.id}: cada tarjeta es un elemento <video> nuevo (no el mismo reutilizado con el src
-    // cambiado) — si no, al pasar de un reel a otro el navegador se queda a mitad de camino,
-    // cargando la fuente vieja sobre la nueva, y el siguiente video queda colgado.
-    return <video key={t.id} ref={videoRef} src={src} className="absolute inset-0 h-full w-full object-contain" playsInline loop controls={false} />
+  if (esVid) {
+    return <video ref={localRef} src={src} className="absolute inset-0 h-full w-full object-contain" playsInline loop controls={false} />
   }
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img key={t.id} src={src} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />
+    <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" draggable={false} />
   )
 }
 
