@@ -444,7 +444,6 @@ function Detalle({ p, onCerrar }: { p: PiezaCal; onCerrar: () => void }) {
         </div>
         {p.video ? (
           // La pieza final tal cual va a salir: con controles y sonido (el play es un gesto del usuario).
-          // eslint-disable-next-line jsx-a11y/media-has-caption
           <video key={p.id} src={p.video} poster={p.imagen ?? undefined} controls playsInline preload="metadata" className="max-h-[60vh] w-full bg-black object-contain" />
         ) : (
           p.imagen && (
