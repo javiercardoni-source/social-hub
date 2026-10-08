@@ -442,9 +442,15 @@ function Detalle({ p, onCerrar }: { p: PiezaCal; onCerrar: () => void }) {
             <X className="h-5 w-5" />
           </button>
         </div>
-        {p.imagen && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={p.imagen} alt="" className="max-h-[55vh] w-full bg-gray-100 object-contain" />
+        {p.video ? (
+          // La pieza final tal cual va a salir: con controles y sonido (el play es un gesto del usuario).
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video key={p.id} src={p.video} poster={p.imagen ?? undefined} controls playsInline preload="metadata" className="max-h-[60vh] w-full bg-black object-contain" />
+        ) : (
+          p.imagen && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={p.imagen} alt="" className="max-h-[55vh] w-full bg-gray-100 object-contain" />
+          )
         )}
         <div className="space-y-3 p-4 text-sm">
           <p className="flex items-center gap-2">

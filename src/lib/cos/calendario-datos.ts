@@ -22,6 +22,8 @@ export type PiezaCal = {
   estado: EstadoCal
   thumb: string | null
   imagen: string | null
+  /** La pieza final si es video (reel, historia-video, video de Facebook): para verla como va a salir. */
+  video: string | null
   texto: string
   porque: string | null
   permalink: string | null
@@ -85,7 +87,9 @@ export async function cargarCalendario(brand: ActiveBrand | null, desdeDia: stri
   const thumbKey = (p: Row) => [...p.cos_post_media].sort((a, b) => a.position - b.position)[0]?.cos_asset_versions?.cos_assets?.thumb_key ?? null
   // La pieza final si es imagen (post con plantilla, historia); si es video, la miniatura del original.
   const imagenKey = (p: Row) => (p.render_key && /\.jpe?g$/i.test(p.render_key) ? p.render_key : null)
-  const urls = await signedUrls([...rows.map(thumbKey), ...rows.map(imagenKey)].filter(Boolean) as string[], 3 * 3600)
+  // El video final, para reproducirlo en el detalle (Javier, 08-10: "darle play a lo que sea reel o historia").
+  const videoKey = (p: Row) => (p.render_key && /\.mp4$/i.test(p.render_key) ? p.render_key : null)
+  const urls = await signedUrls([...rows.map(thumbKey), ...rows.map(imagenKey), ...rows.map(videoKey)].filter(Boolean) as string[], 3 * 3600)
 
   const piezas: PiezaCal[] = []
   for (const p of rows) {
@@ -96,6 +100,7 @@ export async function cargarCalendario(brand: ActiveBrand | null, desdeDia: stri
       p.status === "PUBLISHED" ? "publicada" : p.status === "PENDING_APPROVAL" ? "propuesta" : ["FAILED", "MISSED"].includes(p.status) ? "problema" : p.status === "PAUSED" ? "pausada" : "aprobada"
     const tk = thumbKey(p)
     const ik = imagenKey(p)
+    const vk = videoKey(p)
     piezas.push({
       id: p.id,
       dia: local.toISOString().slice(0, 10),
@@ -106,6 +111,7 @@ export async function cargarCalendario(brand: ActiveBrand | null, desdeDia: stri
       estado,
       thumb: tk ? (urls[tk] ?? null) : null,
       imagen: ik ? (urls[ik] ?? null) : tk ? (urls[tk] ?? null) : null,
+      video: vk ? (urls[vk] ?? null) : null,
       texto: p.caption,
       porque: p.schedule_reason,
       permalink: p.permalink,
