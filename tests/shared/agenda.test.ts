@@ -137,6 +137,19 @@ describe("asignar", () => {
     }
   })
 
+  it("lo aprobado que no encuentra otro lugar conserva su hora RESERVADA: nadie cae encima (07-10-2026)", () => {
+    const MARTES = "2026-10-06"
+    const r = reglas({ ritmo: { postsSemana: 10, historiasDia: 3 } }) // 2 por día, 4 h entre sí
+    const fijo = { account: "ig", format: "reel" as const, at: ar(MARTES, 10).toISOString() }
+    // b: aprobada a las 19:00, su ventana (9–11) quedó toda a menos de 4 h del fijo → sin lugar, se queda.
+    const b = post("b", { ventana: { desde: ar(MARTES, 9).toISOString(), hasta: ar(MARTES, 11).toISOString() }, actual: ar(MARTES, 19).toISOString(), creada: "2026-01-01" })
+    // a: su única opción es exactamente las 19:00 de b. Antes la tomaba como libre.
+    const a = post("a", { ventana: { desde: ar(MARTES, 19).toISOString(), hasta: ar(MARTES, 19).toISOString() }, actual: ar(MARTES, 12).toISOString(), creada: "2026-01-02" })
+    const { asignadas, sinLugar } = asignar([a, b], plano, [fijo], r)
+    expect(sinLugar.map((s) => s.id).sort()).toEqual(["a", "b"])
+    expect(asignadas).toEqual([])
+  })
+
   it("posts: máximo 1 por día por cuenta (y 4 h entre sí); historias: 5 por día y 90 min", () => {
     const { asignadas } = asignar([post("a"), post("b"), post("c")], plano, [], reglas())
     expect(new Set(asignadas.map((a) => enBA(new Date(a.at)).dia)).size).toBe(3)

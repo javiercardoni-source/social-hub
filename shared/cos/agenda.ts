@@ -413,6 +413,13 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
   // Primero las más restringidas; entre iguales, la más vieja (con 3 meses de agenda, el orden importa).
   const orden = [...piezas].sort((a, b) => rigidez(b) - rigidez(a) || (a.creada ?? "").localeCompare(b.creada ?? "") || a.id.localeCompare(b.id))
   const puestas: Ocupado[] = [...ocupados]
+  // Lo aprobado que ya tiene hora la reserva desde el principio: si después no se le encuentra otro
+  // lugar se queda donde está, y nadie puede caer en ese horario. (07-10-2026: dos piezas de la misma
+  // cuenta quedaron a la misma hora exacta porque la que no tenía lugar seguía en su hora vieja sin
+  // reservarla, y la otra la tomó como libre.)
+  const reservas = new Map<string, Ocupado>()
+  for (const p of piezas) if (p.ventana && p.actual) reservas.set(p.id, { account: p.account, format: p.format, at: p.actual })
+  puestas.push(...reservas.values())
   const asignadas: Asignacion[] = []
   const sinLugar: { id: string; motivo: string }[] = []
   // Hasta el final del último día del horizonte (dias = 0: solo hoy).
@@ -421,6 +428,9 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
     // Lo aprobado con ventana se mueve solo lejos de ahora (3 h). Lo pendiente, desde dentro de 2 h: la
     // agenda corre cada hora, así un borrador nunca queda con su hora vencida (el reloj lo vencería).
     const minimo = new Date(r.desde.getTime() + (p.ventana ? 3 : 2) * HORA)
+    // Su propia hora actual no le estorba (puede quedarse o moverse).
+    const reserva = reservas.get(p.id)
+    if (reserva) puestas.splice(puestas.indexOf(reserva), 1)
     const modelo = m(p)
     const evaluar = (cands: Date[]) =>
       cands
@@ -456,6 +466,8 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
       }
     }
     if (!opciones.length) {
+      // Se queda en su hora: el horario sigue reservado para que nadie caiga encima.
+      if (reserva) puestas.push(reserva)
       sinLugar.push({ id: p.id, motivo: p.ventana ? "no hay lugar dentro de su ventana" : `no hay horario libre en los próximos ${r.dias} días con el ritmo de la cuenta` })
       continue
     }
