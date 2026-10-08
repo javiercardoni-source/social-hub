@@ -347,13 +347,18 @@ const draftPost: Handler = async (job, { db, queue, log }) => {
     log("sin borrador automático para este asset", { asset: a.id, source: a.source, consent: a.consent })
     return
   }
-  // Idempotencia: si ya hay posts vivos con este archivo, no se arman otros.
+  // Idempotencia: si ya hay posts vivos con este archivo, no se arman otros. Una pieza vencida
+  // (EXPIRED) no cuenta como viva: el archivo se puede volver a usar (08-10-2026: dos fotos del
+  // archivo de Bijutsukan no armaban nada porque solo tenían historias vencidas).
   const { data: existing } = await db
     .from("cos_post_media")
     .select("cos_posts!inner(status)")
     .eq("version_id", a.current_version_id)
-    .not("cos_posts.status", "in", "(CANCELLED,REJECTED)")
-  if (existing?.length) return
+    .not("cos_posts.status", "in", "(CANCELLED,REJECTED,EXPIRED)")
+  if (existing?.length) {
+    log("el archivo ya tiene piezas vivas: sin borrador nuevo", { asset: a.id, piezas: existing.length })
+    return
+  }
 
   const { data: accounts } = await db
     .from("cos_social_accounts")
