@@ -194,8 +194,10 @@ export type Pieza = {
    */
   despuesDe?: string
   despuesDeAt?: string
-  /** Cuándo se creó: con 3 meses de agenda, lo más viejo sale primero. */
+  /** Cuándo se creó: entre iguales, lo más viejo sale primero. */
   creada?: string
+  /** Prioridad al repartir los lugares (mayor = antes). Lo usa la replanificación del mes: las mejores piezas primero. */
+  prioridad?: number
 }
 export type Ocupado = { account: string; format: Formato; at: string }
 export type Asignacion = {
@@ -230,7 +232,17 @@ export type Reglas = {
 export type Ritmo = { postsSemana: number; historiasDia: number }
 export const RITMO_DEFAULT: Ritmo = { postsSemana: 5, historiasDia: 3 }
 /** Días hacia adelante que mira la agenda (07-10-2026: de 7 a 90, una temporada). */
-export const HORIZONTE_DIAS = 90
+/**
+ * Hasta dónde planifica la agenda (08-10-2026, Javier: "trabajemos solo con octubre; me arrepentí de
+ * los 3 meses"): el MES EN CURSO. A partir del día 25 entra también el mes siguiente, así sus primeros
+ * días no quedan vacíos. Devuelve los días hacia adelante desde `hoy` (Buenos Aires).
+ */
+export function horizonteDias(hoy: Date = new Date()): number {
+  const { dia } = enBA(hoy)
+  const [y, m, d] = dia.split("-").map(Number)
+  const ultimo = new Date(Date.UTC(y, m + (d >= 25 ? 1 : 0), 0)).toISOString().slice(0, 10) // día 0 = último del mes anterior
+  return Math.round((Date.parse(`${ultimo}T12:00:00Z`) - Date.parse(`${dia}T12:00:00Z`)) / DIA)
+}
 
 export function leerRitmo(x: unknown): Ritmo {
   const o = (x && typeof x === "object" ? x : {}) as Record<string, unknown>
@@ -411,7 +423,7 @@ function candidatosEntre(desde: Date, hasta: Date, r: Reglas): Date[] {
  */
 export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados: Ocupado[], r: Reglas): { asignadas: Asignacion[]; sinLugar: { id: string; motivo: string }[] } {
   // Primero las más restringidas; entre iguales, la más vieja (con 3 meses de agenda, el orden importa).
-  const orden = [...piezas].sort((a, b) => rigidez(b) - rigidez(a) || (a.creada ?? "").localeCompare(b.creada ?? "") || a.id.localeCompare(b.id))
+  const orden = [...piezas].sort((a, b) => rigidez(b) - rigidez(a) || (b.prioridad ?? 0) - (a.prioridad ?? 0) || (a.creada ?? "").localeCompare(b.creada ?? "") || a.id.localeCompare(b.id))
   const puestas: Ocupado[] = [...ocupados]
   // Lo aprobado que ya tiene hora la reserva desde el principio: si después no se le encuentra otro
   // lugar se queda donde está, y nadie puede caer en ese horario. (07-10-2026: dos piezas de la misma
@@ -481,6 +493,14 @@ export function asignar(piezas: Pieza[], m: (p: Pieza) => ModeloAgenda, ocupados
         elegido = poca[semilla(p.id + ":franja") % poca.length]
         fuente = "exploracion"
       }
+    }
+    // Con poca historia, el "mejor" horario es casi un empate: en vez de repetir siempre la misma hora
+    // (08-10-2026, Javier: "cambiemos eso de la monotonía" — Sensaciones salía siempre 17:00, Facebook
+    // 19:00), se elige entre las que rinden parecido (±5 %) con una semilla estable por pieza.
+    const pocaData = !(modelo.n >= 15 && elegido.evidencia >= 3)
+    if (!explorar && pocaData) {
+      const parecidas = opciones.filter((o) => o.lift >= elegido.lift * 0.95)
+      if (parecidas.length > 1) elegido = parecidas[semilla(p.id + ":variedad") % parecidas.length]
     }
     // Si ya tenía una hora y rinde casi igual (±3 %), no se mueve: menos cambios, menos ruido.
     if (p.actual && !explorar) {

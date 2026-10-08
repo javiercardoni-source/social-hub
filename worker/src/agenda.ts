@@ -29,7 +29,7 @@ import {
   abreEseDia,
   validarPropuesta,
   leerRitmo,
-  HORIZONTE_DIAS,
+  horizonteDias,
   historiaDeClima,
   CONSIGNAS_CLIMA,
   type Apertura,
@@ -222,8 +222,8 @@ export async function reglasDeMarca(db: SupabaseClient, brandId: string, clima?:
   const { data: b } = await db.from("cos_brands").select("open_hours, rules_json, ritmo").eq("id", brandId).single()
   return {
     desde: new Date(),
-    // Una temporada (07-10-2026): con el ritmo de la marca, la agenda llena semana por semana.
-    dias: HORIZONTE_DIAS,
+    // El mes en curso (08-10-2026); con el ritmo de la marca, la agenda llena semana por semana.
+    dias: horizonteDias(),
     ritmo: leerRitmo(b?.ritmo),
     horaMin: 9,
     horaMax: 22,
@@ -253,6 +253,11 @@ function aPieza(p: PostPlan): Pieza {
   return pieza
 }
 
+type Insumos = [MediaRow[], Set<string>, Map<string, ClimaCat>, Awaited<ReturnType<typeof settings>>]
+const insumosAgenda = (db: SupabaseClient): Promise<Insumos> => Promise.all([cargarMedia(db), cargarFeriados(db), climaFuturo(db), settings(db)])
+type Marca = { id: string; slug: string; name: string }
+type Log = (msg: string, extra?: Record<string, unknown>) => void
+
 const planearAgenda: Handler = async (job, { db, log }) => {
   const soloMarca = typeof job.payload.brand_id === "string" ? job.payload.brand_id : null
   const conAgente = job.payload.agente === true
@@ -260,10 +265,18 @@ const planearAgenda: Handler = async (job, { db, log }) => {
   if (soloMarca) q = q.eq("id", soloMarca)
   const { data: marcas } = await q
   if (!marcas?.length) return
-  const [media, feriados, clima, s] = await Promise.all([cargarMedia(db), cargarFeriados(db), climaFuturo(db), settings(db)])
+  const insumos = await insumosAgenda(db)
+  for (const b of marcas) await planearMarca(db, log, b, insumos, { conAgente })
+}
 
-  for (const b of marcas) {
-    const reglas = await reglasDeMarca(db, b.id, clima, feriados)
+/**
+ * Planifica una marca (lo pendiente y lo aprobado con ventana). `prioridades` = quién va primero al
+ * repartir lugares (la replanificación del mes manda las mejores piezas primero); `dias` = horizonte
+ * distinto del de siempre. Devuelve qué quedó ubicado y qué no tuvo lugar.
+ */
+async function planearMarca(db: SupabaseClient, log: Log, b: Marca, [media, feriados, clima, s]: Insumos, opts: { conAgente?: boolean; prioridades?: Map<string, number>; dias?: number } = {}): Promise<{ ubicadas: string[]; sinLugar: string[] }> {
+  {
+    const reglas: Reglas = { ...(await reglasDeMarca(db, b.id, clima, feriados)), ...(opts.dias != null ? { dias: opts.dias } : {}) }
     const { data: posts, error } = await db
       .from("cos_posts")
       .select("id, created_at, account_id, status, post_type, campaign, scheduled_at, window_start, window_end, schedule_lock, schedule_source, schedule_reason, schedule_log, cos_social_accounts(platform), cos_post_media(position, cos_asset_versions(asset_id))")
@@ -284,7 +297,9 @@ const planearAgenda: Handler = async (job, { db, log }) => {
           (p.status === "SCHEDULED" && !!p.window_start && !!p.scheduled_at && Date.parse(p.scheduled_at) > ahora + 3 * HORA)),
     )
     // Una historia de feriado/clima pendiente cuya hora ya pasó se vence sola (no se reubica).
-    const piezas = movibles.filter((p) => !(p.status === "PENDING_APPROVAL" && p.campaign && p.scheduled_at && Date.parse(p.scheduled_at) <= ahora)).map(aPieza)
+    const piezas = movibles
+      .filter((p) => !(p.status === "PENDING_APPROVAL" && p.campaign && p.scheduled_at && Date.parse(p.scheduled_at) <= ahora))
+      .map((p) => ({ ...aPieza(p), prioridad: opts.prioridades?.get(p.id) }))
     const ids = new Set(piezas.map((p) => p.id))
     // Historia de una subida → después de su reel/post de Instagram (el de la misma cuenta y el mismo archivo).
     for (const pz of piezas) {
@@ -300,7 +315,7 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     const ocupados: Ocupado[] = todos
       .filter((p) => !ids.has(p.id) && p.scheduled_at && p.status !== "PENDING_APPROVAL")
       .map((p) => ({ account: p.account_id, format: p.post_type, at: p.scheduled_at! }))
-    if (!piezas.length) continue
+    if (!piezas.length) return { ubicadas: [], sinLugar: [] }
 
     const modelos = new Map<string, ReturnType<typeof modeloPara>>()
     const plataforma = new Map(todos.map((p) => [p.account_id, p.cos_social_accounts?.platform ?? "instagram"]))
@@ -314,7 +329,7 @@ const planearAgenda: Handler = async (job, { db, log }) => {
     let nota: string | null = null
     let agente: "ia" | "motor" = "motor"
 
-    if (conAgente) {
+    if (opts.conAgente) {
       // El agente mira el plan del motor con el contexto de la semana y propone ajustes; el código
       // los valida con las mismas reglas. Si la IA falla, queda el plan del motor.
       try {
@@ -369,11 +384,179 @@ const planearAgenda: Handler = async (job, { db, log }) => {
         else cambios++
       }
     }
-    if (conAgente || cambios) {
+    if (opts.conAgente || cambios) {
       await db.from("cos_agenda_plans").insert({ brand_id: b.id, plan_json: plan.map((a) => ({ post_id: a.id, at: a.at, porque: a.porque, fuente: a.fuente })), nota, agente })
     }
     log("agenda planeada", { brand: b.slug, piezas: piezas.length, cambios, sinLugar: base.sinLugar.length, agente })
+    return { ubicadas: plan.map((a) => a.id), sinLugar: base.sinLugar.map((x) => x.id) }
   }
+}
+
+// ── agenda:replan · "todo en el mes" ────────────────────────────────────────
+type Candidata = {
+  id: string
+  status: string
+  account_id: string
+  post_type: Format
+  scheduled_at: string | null
+  schedule_lock: boolean
+  approved_by: string | null
+  approved_at: string | null
+  avisos: unknown
+  montaje: { respaldo?: boolean } | null
+  render_qa: { score?: number } | null
+  cos_post_media: { position: number; cos_asset_versions: { asset_id: string; cos_assets: { quality_score: number | null; ai_json: { commercial_value?: number; risk_flags?: string[] } | null } | null } | null }[]
+}
+
+/** Qué tan buena es una pieza para elegir cuáles entran cuando no entra todo (0–250, mayor = mejor). */
+export function puntajeDePieza(p: Pick<Candidata, "avisos" | "montaje" | "render_qa" | "cos_post_media">): number {
+  const a = [...p.cos_post_media].sort((x, y) => x.position - y.position)[0]?.cos_asset_versions?.cos_assets
+  const ai = a?.ai_json ?? {}
+  let s = (a?.quality_score ?? 50) + (ai.commercial_value ?? 50) / 2 + (p.render_qa?.score ?? 70) / 2
+  if (Array.isArray(p.avisos) && p.avisos.length) s -= 30 // nombra ingredientes que no se ven
+  if (p.montaje?.respaldo) s -= 20 // guion de respaldo, sin IA
+  s -= 10 * (ai.risk_flags?.length ?? 0)
+  return Math.round(s)
+}
+
+/**
+ * agenda:replan — "trabajemos solo con octubre: reordená todo lo programado, lo mejor que tengamos,
+ * todo en el mes; lo que sobre vuelve a la base" (Javier, 08-10-2026). Por marca:
+ *  1. Candidatas: lo aprobado/programado que sale en más de 3 h. Lo fijado a mano DENTRO del horizonte
+ *     se respeta como ancla; lo fijado a mano fuera del horizonte también se reordena.
+ *  2. Vuelven a pendiente (guardando quién y cuándo las aprobó) y el planificador las ubica por puntaje
+ *     (puntajeDePieza) con el ritmo, la apertura y el horizonte del mes.
+ *  3. Las ubicadas se vuelven a aprobar en nombre de quien las había aprobado. Las que no entran (y la
+ *     historia de un reel que no entró) quedan pendientes, sin hora, con la razón "sobró para el mes".
+ * Payload: { brand_id?: string }.
+ */
+const replanificarMes: Handler = async (job, { db, log }) => {
+  const soloMarca = typeof job.payload.brand_id === "string" ? job.payload.brand_id : null
+  let q = db.from("cos_brands").select("id, slug, name").eq("active", true)
+  if (soloMarca) q = q.eq("id", soloMarca)
+  const { data: marcas } = await q
+  if (!marcas?.length) return
+  const insumos = await insumosAgenda(db)
+  const dias = horizonteDias()
+  const hoy = enBA(new Date()).dia
+  const limite = deBA(new Date(Date.parse(`${hoy}T12:00:00Z`) + dias * 86_400_000).toISOString().slice(0, 10), 24 * 60 - 1)
+  const ahora = Date.now()
+
+  for (const b of marcas) {
+    const { data, error } = await db
+      .from("cos_posts")
+      .select(
+        "id, status, account_id, post_type, scheduled_at, schedule_lock, approved_by, approved_at, avisos, montaje, render_qa, cos_post_media(position, cos_asset_versions(asset_id, cos_assets!cos_asset_versions_asset_id_fkey(quality_score, ai_json)))",
+      )
+      .eq("brand_id", b.id)
+      .in("status", ["APPROVED", "SCHEDULED"])
+      .gte("scheduled_at", new Date(ahora + 3 * HORA).toISOString())
+    if (error) throw new Error(`posts: ${error.message}`)
+    const todas = (data ?? []) as unknown as Candidata[]
+    const candidatas = todas.filter((p) => !(p.schedule_lock && p.scheduled_at && Date.parse(p.scheduled_at) <= limite.getTime()))
+    if (!candidatas.length) {
+      log("replan: nada que reordenar", { brand: b.slug })
+      continue
+    }
+    const prioridades = new Map(candidatas.map((p) => [p.id, puntajeDePieza(p)]))
+    const aprobacion = new Map(candidatas.map((p) => [p.id, { by: p.approved_by, at: p.approved_at }]))
+    const subida = (p: Candidata) => [...p.cos_post_media].sort((x, y) => x.position - y.position)[0]?.cos_asset_versions?.asset_id ?? null
+
+    // 1) Todas vuelven a pendiente, sin hora ni ventana: el planificador decide de cero.
+    let devueltas = 0
+    for (const p of candidatas) {
+      const { error: e } = await db
+        .from("cos_posts")
+        .update({ status: "PENDING_APPROVAL", scheduled_at: null, window_start: null, window_end: null, schedule_lock: false, schedule_source: null, schedule_reason: "Reordenando el mes" })
+        .eq("id", p.id)
+        .in("status", ["APPROVED", "SCHEDULED"])
+      if (e) log("replan: no se pudo devolver a pendiente", { post: p.id, error: e.message })
+      else devueltas++
+    }
+
+    // 2) El planificador las ubica por puntaje, dentro del mes.
+    await planearMarca(db, log, b, insumos, { prioridades, dias })
+
+    // 3) Las que quedaron con hora dentro del horizonte se vuelven a aprobar; la historia de un reel que
+    //    no entró, tampoco entra.
+    const { data: ahoraPend } = await db.from("cos_posts").select("id, scheduled_at").in("id", candidatas.map((p) => p.id)).eq("status", "PENDING_APPROVAL")
+    const conHora = new Set((ahoraPend ?? []).filter((p) => p.scheduled_at && Date.parse(p.scheduled_at) <= limite.getTime()).map((p) => p.id))
+    const porId = new Map(candidatas.map((p) => [p.id, p]))
+    const entra = (p: Candidata): boolean => {
+      if (!conHora.has(p.id)) return false
+      if (p.post_type !== "story") return true
+      const sub = subida(p)
+      const hermano = candidatas.find((h) => h.id !== p.id && h.account_id === p.account_id && h.post_type !== "story" && subida(h) === sub)
+      return hermano ? conHora.has(hermano.id) : true
+    }
+    let reaprobadas = 0
+    const sobraron: Candidata[] = []
+    for (const id of candidatas.map((p) => p.id)) {
+      const p = porId.get(id)!
+      if (!entra(p)) {
+        sobraron.push(p)
+        continue
+      }
+      const ap = aprobacion.get(id)!
+      const { error: e1 } = await db
+        .from("cos_posts")
+        .update({ status: "APPROVED", approved_by: ap.by, approved_at: ap.at ?? new Date().toISOString() })
+        .eq("id", id)
+        .eq("status", "PENDING_APPROVAL")
+      if (e1) {
+        log("replan: no se pudo volver a aprobar", { post: id, error: e1.message })
+        continue
+      }
+      const { error: e2 } = await db.from("cos_posts").update({ status: "SCHEDULED" }).eq("id", id)
+      if (e2) log("replan: no se pudo programar", { post: id, error: e2.message })
+      else reaprobadas++
+    }
+    for (const p of sobraron) {
+      await db
+        .from("cos_posts")
+        .update({ scheduled_at: null, window_start: null, window_end: null, schedule_source: null, schedule_reason: "Sobró para el mes: vuelve a la cola y se programa cuando haya lugar" })
+        .eq("id", p.id)
+        .eq("status", "PENDING_APPROVAL")
+    }
+    await db.from("cos_audit_log").insert({
+      event: "agenda:replan",
+      entity_type: "brand",
+      entity_id: b.id,
+      actor: "worker",
+      details_json: { hasta: limite.toISOString(), candidatas: candidatas.length, devueltas, reaprobadas, sobraron: sobraron.map((p) => ({ id: p.id, tipo: p.post_type, puntaje: prioridades.get(p.id) })) },
+    })
+    log("replan del mes", { brand: b.slug, hasta: limite.toISOString().slice(0, 10), candidatas: candidatas.length, reaprobadas, sobraron: sobraron.length })
+  }
+}
+
+// ── historias:auto · clima y feriado siempre aprobadas ──────────────────────
+/**
+ * Las historias automáticas (clima, feriado) salen solas (Javier, 08-10-2026: "por ahora siempre
+ * aprobadas"): cada hora, las pendientes con su pieza final lista y hora futura se aprueban en nombre
+ * del aprobador configurado (cos_settings.aprobador_auto). Se apaga con historias_auto = false.
+ */
+const aprobarHistoriasAutomaticas: Handler = async (_job, { db, log }) => {
+  const { data: s } = await db.from("cos_settings").select("historias_auto, aprobador_auto").eq("id", true).single()
+  if (!s?.historias_auto || !s.aprobador_auto) return
+  const { data } = await db
+    .from("cos_posts")
+    .select("id, campaign")
+    .eq("status", "PENDING_APPROVAL")
+    .or("campaign.like.clima:*,campaign.like.feriado:*")
+    .not("render_qa", "is", null)
+    .gte("scheduled_at", new Date(Date.now() + 5 * 60_000).toISOString())
+  let n = 0
+  for (const p of data ?? []) {
+    const { error: e1 } = await db.from("cos_posts").update({ status: "APPROVED", approved_by: s.aprobador_auto, approved_at: new Date().toISOString() }).eq("id", p.id).eq("status", "PENDING_APPROVAL")
+    if (e1) {
+      log("historia automática: no se pudo aprobar", { post: p.id, error: e1.message })
+      continue
+    }
+    const { error: e2 } = await db.from("cos_posts").update({ status: "SCHEDULED" }).eq("id", p.id)
+    if (e2) log("historia automática: no se pudo programar", { post: p.id, error: e2.message })
+    else n++
+  }
+  if (n) log("historias automáticas aprobadas", { n })
 }
 
 /** Lo que el motor de gustos (F7 M3) sugiere hacer esta semana: un solo plan, gustos dice qué y la agenda cuándo. */
@@ -628,6 +811,8 @@ export const agendaHandlers: Record<string, Handler> = {
   "agenda:context": contextoMedia,
   "agenda:learn": aprenderAgenda,
   "agenda:plan": planearAgenda,
+  "agenda:replan": replanificarMes,
+  "historias:auto": aprobarHistoriasAutomaticas,
   "clima:stories": historiasClima,
   "brand:hours": horariosDeWeb,
 }

@@ -24,6 +24,7 @@ import {
   type Pieza,
   type PostCtx,
   type Reglas,
+  horizonteDias,
 } from "../../shared/cos/agenda"
 import { slotModel } from "../../shared/cos/timing"
 
@@ -419,5 +420,34 @@ describe("agenda a 3 meses con ritmo (07-10-2026)", () => {
   it("el ritmo se lee con límites razonables", () => {
     expect(leerRitmo(null)).toEqual({ postsSemana: 5, historiasDia: 3 })
     expect(leerRitmo({ postsSemana: 40, historiasDia: 0 })).toEqual({ postsSemana: 14, historiasDia: 1 })
+  })
+})
+
+describe("horizonteDias: el mes en curso", () => {
+  it("hasta el último día del mes; desde el 25, también el mes siguiente", () => {
+    expect(horizonteDias(ar("2026-10-08", 12))).toBe(23) // 8 → 31 de octubre
+    expect(horizonteDias(ar("2026-10-01", 12))).toBe(30)
+    expect(horizonteDias(ar("2026-10-25", 12))).toBe(36) // 25-oct → 30-nov
+    expect(horizonteDias(ar("2026-12-28", 12))).toBe(34) // 28-dic → 31-ene
+    expect(horizonteDias(ar("2026-02-10", 12))).toBe(18) // febrero de 28
+  })
+})
+
+describe("variedad de horarios con poca data", () => {
+  const post = (id: string, x: Partial<Pieza> = {}): Pieza => ({ id, account: "ig", format: "reel", ...x })
+  it("con poca historia no repite siempre la misma hora: reparte entre las que rinden parecido", () => {
+    const poca = (): ModeloAgenda => modeloAgenda(historia(5), historia(5))
+    const r = reglas({ dias: 20 })
+    const { asignadas } = asignar(Array.from({ length: 8 }, (_, i) => post(`p${i}`)), poca, [], r)
+    const horas = new Set(asignadas.map((a) => enBA(new Date(a.at)).min))
+    expect(asignadas.length).toBe(8)
+    expect(horas.size).toBeGreaterThanOrEqual(3)
+  })
+  it("con historia suficiente y una hora que gana claro, la elige siempre (no es azar)", () => {
+    // 60 posts, los de las 16:00 rinden el triple: hay evidencia de sobra para esa hora.
+    const fuerte = (): ModeloAgenda => modeloAgenda(historia(60, (i) => (i % 10 === 5 ? 300 : 100)), historia(60, (i) => (i % 10 === 5 ? 300 : 100)))
+    const { asignadas } = asignar(Array.from({ length: 4 }, (_, i) => post(`q${i}`)), fuerte, [], reglas({ dias: 10 }))
+    const horas = new Set(asignadas.map((a) => enBA(new Date(a.at)).min))
+    expect(horas).toEqual(new Set([16 * 60]))
   })
 })

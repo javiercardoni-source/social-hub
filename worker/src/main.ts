@@ -208,6 +208,8 @@ function agendaClock() {
   // Ingredientes: controla los textos de las piezas pendientes que todavía no pasaron por el control
   // (worker/src/ingredientes-revisar.ts). Sin condición: si no queda ninguna, no hace nada.
   void pedir("ingredientes:revisar", {}, `ingredientes:revisar:${hora}`)
+  // Historias automáticas (clima, feriado): se aprueban solas en cuanto su pieza está lista (worker/src/agenda.ts).
+  void pedir("historias:auto", {}, `historias:auto:${hora}`)
   if (hora % 3 === 0) void pedir("clima:stories", {}, `clima:stories:${hora}`)
   if (horaBA === 5) {
     void pedir("agenda:context", {}, `agenda:context:${dia}`)
