@@ -245,9 +245,9 @@ const armarVersion: Handler = async (job, { db, log }) => {
           medio: segundo,
         })
         if (!guion) throw new PermanentError("no hay material para el video")
-        const { data: temas } = await db.from("cos_music_tracks").select("storage_key").eq("brand_id", set.brand_id).order("energy", { ascending: false, nullsFirst: false }).limit(3)
+        const { data: temas } = await db.from("cos_music_tracks").select("storage_key").eq("brand_id", set.brand_id).eq("active", true).order("energy", { ascending: false, nullsFirst: false }).limit(3)
         // Cada versión arranca con otro tema (si la marca tiene varios). Si un tema no baja (la
-        // biblioteca se renueva y quedan filas sin archivo), se prueba el siguiente; sin ninguno, va sin música.
+        // archivo se borró a mano antes de que la sincronización lo marque), se prueba el siguiente; sin ninguno, va sin música.
         let musica: string | null = null
         for (let k = 0; k < (temas?.length ?? 0) && !musica; k++) {
           const t = temas![(v.numero - 1 + k) % temas!.length]

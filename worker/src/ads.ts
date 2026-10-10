@@ -774,7 +774,7 @@ const piece: Handler = async (job, { db, log }) => {
         }
         const kit = await kitDeMarca(brand.slug, await loadKit(db, p.brand_id))
         if (!kit) throw new PermanentError(`la marca ${brand.slug} no tiene kit de diseño`)
-        const { data: temas } = await db.from("cos_music_tracks").select("storage_key").eq("brand_id", p.brand_id).order("energy", { ascending: false, nullsFirst: false }).limit(1)
+        const { data: temas } = await db.from("cos_music_tracks").select("storage_key").eq("brand_id", p.brand_id).eq("active", true).order("energy", { ascending: false, nullsFirst: false }).limit(1)
         // a) El video ganador tiene partes limpias: se usan esas, con otra apertura.
         const limpio = a.video_key ? guionReedicion(tramos(a), { ...textos, gancho: (p.numeros.apertura ?? "").slice(0, 40), idea: "re-edición del ganador" }) : null
         pieces = await withTmp(async (dir) => {
