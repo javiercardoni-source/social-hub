@@ -34,14 +34,24 @@ const FF = { timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 }
 
 /** Un archivo del set, ya guardado en cos-media. */
 type Material = { origen: "instagram" | "archivo"; id: string; tipo: "foto" | "video"; key: string; thumb_key: string | null; duracion: number | null }
-type Candidata = { origen: "instagram" | "archivo"; id: string; thumb_key: string }
+/** `texto`: lo que se sabe del archivo (descripción del empleado, resumen y productos de la IA, o el texto del post). */
+type Candidata = { origen: "instagram" | "archivo"; id: string; thumb_key: string; texto: string }
+
+/** Lo que dice un archivo del Archivo, en una línea para la IA. */
+function textoArchivo(description: unknown, ai: unknown): string {
+  const j = (ai ?? {}) as { summary?: string; products?: unknown[] }
+  const productos = Array.isArray(j.products) ? j.products.map((p) => (typeof p === "string" ? p : (p as { name?: string })?.name)).filter(Boolean).join(", ") : ""
+  return [description, j.summary, productos && `productos: ${productos}`].filter((x) => typeof x === "string" && x.trim()).join(" · ").slice(0, 400)
+}
+/** Lo que el Archivo ya marcó como generado con IA o de banco de imágenes: no es producto real. */
+const esDeIA = (ai: unknown) => ((ai as { risk_flags?: unknown[] })?.risk_flags ?? []).some((f) => typeof f === "string" && /generad|banco|render/i.test(f))
 
 /** Candidatas por fuente, las más prometedoras primero (la IA ve hasta 12 de cada una). */
 async function candidatas(db: SupabaseClient, brandId: string, fuente: "instagram" | "archivo"): Promise<Candidata[]> {
   if (fuente === "instagram") {
     const { data } = await db
       .from("cos_media")
-      .select("id, thumb_key")
+      .select("id, thumb_key, caption")
       .eq("brand_id", brandId)
       .eq("platform", "instagram")
       .in("format", ["feed", "reel", "carousel"])
@@ -49,11 +59,11 @@ async function candidatas(db: SupabaseClient, brandId: string, fuente: "instagra
       .gte("posted_at", new Date(Date.now() - 365 * 86_400_000).toISOString())
       .order("metrics->reach", { ascending: false, nullsFirst: false })
       .limit(12)
-    return (data ?? []).map((m) => ({ origen: "instagram" as const, id: m.id as string, thumb_key: m.thumb_key as string }))
+    return (data ?? []).map((m) => ({ origen: "instagram" as const, id: m.id as string, thumb_key: m.thumb_key as string, texto: ((m.caption as string | null) ?? "").slice(0, 400) }))
   }
   const { data } = await db
     .from("cos_assets")
-    .select("id, thumb_key")
+    .select("id, thumb_key, description, ai_json")
     .eq("brand_id", brandId)
     .in("status", ["READY", "IN_USE"])
     .neq("consent", "blocked")
@@ -61,8 +71,11 @@ async function candidatas(db: SupabaseClient, brandId: string, fuente: "instagra
     .not("current_version_id", "is", null)
     .order("quality_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
-    .limit(12)
-  return (data ?? []).map((a) => ({ origen: "archivo" as const, id: a.id as string, thumb_key: a.thumb_key as string }))
+    .limit(30)
+  return (data ?? [])
+    .filter((a) => !esDeIA(a.ai_json))
+    .slice(0, 12)
+    .map((a) => ({ origen: "archivo" as const, id: a.id as string, thumb_key: a.thumb_key as string, texto: textoArchivo(a.description, a.ai_json) }))
 }
 
 /** Lo elegido a mano, solo si es de la marca (y del Archivo, sin consentimiento bloqueado). */
@@ -73,8 +86,8 @@ async function elegidosAMano(db: SupabaseClient, brandId: string, elegidos: Eleg
     db.from("cos_assets").select("id, thumb_key").eq("brand_id", brandId).neq("consent", "blocked").not("current_version_id", "is", null).in("id", ids("archivo")),
   ])
   const ok = new Map<string, Candidata>([
-    ...(ig ?? []).map((m) => [`instagram:${m.id}`, { origen: "instagram" as const, id: m.id as string, thumb_key: (m.thumb_key as string) ?? "" }] as const),
-    ...(ar ?? []).map((a) => [`archivo:${a.id}`, { origen: "archivo" as const, id: a.id as string, thumb_key: (a.thumb_key as string) ?? "" }] as const),
+    ...(ig ?? []).map((m) => [`instagram:${m.id}`, { origen: "instagram" as const, id: m.id as string, thumb_key: (m.thumb_key as string) ?? "", texto: "" }] as const),
+    ...(ar ?? []).map((a) => [`archivo:${a.id}`, { origen: "archivo" as const, id: a.id as string, thumb_key: (a.thumb_key as string) ?? "", texto: "" }] as const),
   ])
   // En el orden en que los eligió Javier.
   return elegidos.map((e) => ok.get(`${e.origen}:${e.id}`)).filter((c): c is Candidata => !!c)
@@ -122,7 +135,7 @@ const prepararSet: Handler = async (job, { db, queue, log }) => {
     let motivo = manual.length ? `${manual.length} elegido${manual.length > 1 ? "s" : ""} a mano` : ""
     if (libres.length) {
       const thumbs = await Promise.all(libres.map((c) => supabaseStorage(db).download(c.thumb_key)))
-      const v = await elegirMaterial({ db, model: s.ai_model, pedido, candidatas: thumbs })
+      const v = await elegirMaterial({ db, model: s.ai_model, pedido, candidatas: thumbs.map((img, i) => ({ img, texto: libres[i].texto })) })
       elegidas = v.elegidas.map((i) => libres[i])
       motivo = [motivo, v.motivo].filter(Boolean).join(" · ")
     }

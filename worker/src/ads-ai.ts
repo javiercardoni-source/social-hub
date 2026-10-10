@@ -275,7 +275,8 @@ export async function elegirMaterial(opts: {
   db: SupabaseClient
   model: string
   pedido: string
-  candidatas: Buffer[]
+  /** La miniatura y lo que se sabe del archivo (descripción, productos, texto del post). */
+  candidatas: { img: Buffer; texto: string }[]
 }): Promise<{ elegidas: number[]; motivo: string }> {
   const response = await anthropic().messages.parse({
     model: opts.model,
@@ -286,8 +287,8 @@ export async function elegirMaterial(opts: {
         role: "user",
         content: [
           ...opts.candidatas.flatMap((c, i) => [
-            { type: "text" as const, text: `Candidata ${i}:` },
-            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: c.toString("base64") } },
+            { type: "text" as const, text: `Candidata ${i}:${c.texto ? ` (lo que se sabe: ${c.texto})` : ""}` },
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: c.img.toString("base64") } },
           ]),
           {
             type: "text",
@@ -296,6 +297,7 @@ export async function elegirMaterial(opts: {
               opts.pedido,
               "",
               "Elegí SOLO las candidatas que muestran claramente lo que dice el texto. Si nombra un ingrediente o un producto (ej. salmón, langostinos, onigiris), ese ingrediente tiene que VERSE en la foto: un roll de otra cosa no sirve aunque sea de la marca.",
+              "Usá lo que se sabe de cada candidata (descripción, productos): en una miniatura la zanahoria o la batata parecen salmón y un roll de remolacha parece atún. Si el texto dice otro relleno, no va.",
               "Mejor 2 que encajan de verdad que 8 que más o menos. La primera que elijas es la foto principal: tiene que ser la más fiel al texto y la más apetitosa (comida de cerca, bien iluminada).",
               "Descartá las que tengan precio escrito, sellos ('gluten free', 'sin TACC'), texto grande encima o personas en primer plano.",
               "MUY IMPORTANTE: solo producto REAL fotografiado. Varias publicaciones de las marcas se hicieron con IA (Sora, renders): listalas en parecen_ia y no las elijas.",
