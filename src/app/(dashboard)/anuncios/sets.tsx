@@ -367,6 +367,11 @@ function TarjetaSet({ s }: { s: SetUI }) {
           </div>
         )}
 
+        {s.material.length > 0 && s.material.length < Math.min(3, s.items.length) && (
+          <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            Encontró {s.material.length === 1 ? "un solo archivo" : `solo ${s.material.length} archivos`} donde se ve lo que pedís, así que las versiones se parecen. Para más variedad: subí más fotos de ese producto al Archivo, o rehacelo con «Lo elijo yo».
+          </p>
+        )}
         {s.error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-900 dark:bg-red-950 dark:text-red-200">{s.error}</p>}
         {s.estado === "preparando" && <p className="text-sm text-muted-foreground">La IA está mirando el material y escribiendo las versiones…</p>}
 
