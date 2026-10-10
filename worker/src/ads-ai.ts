@@ -233,7 +233,7 @@ export async function versionesSet(opts: {
 }): Promise<{ texto: string; copy: string }[]> {
   const response = await anthropic().messages.parse({
     model: opts.model,
-    max_tokens: 2500,
+    max_tokens: 6000,
     system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
     messages: [
       {
@@ -279,7 +279,8 @@ export async function elegirMaterial(opts: {
 }): Promise<{ elegidas: number[]; motivo: string }> {
   const response = await anthropic().messages.parse({
     model: opts.model,
-    max_tokens: 1500,
+    // Hasta 24 candidatas (Instagram + Archivo): con 1500 la respuesta se cortaba (10-10-2026).
+    max_tokens: 6000,
     messages: [
       {
         role: "user",
