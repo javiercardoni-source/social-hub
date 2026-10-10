@@ -507,7 +507,7 @@ const DESTINO: Record<string, string> = {
   MESSAGE_PAGE: "Messenger de Facebook",
   INSTAGRAM_MESSAGE: "mensaje directo de Instagram",
 }
-const CIERRE_CTA: Record<string, string> = {
+export const CIERRE_CTA: Record<string, string> = {
   WHATSAPP_MESSAGE: "Pedí por WhatsApp",
   INSTAGRAM_MESSAGE: "Pedí por mensaje",
   MESSAGE_PAGE: "Pedí por mensaje",
@@ -725,7 +725,7 @@ async function propuesta(db: SupabaseClient, id: string): Promise<Propuesta> {
 }
 
 /** El archivo original de una publicación de Instagram ya publicada (el link de Meta vence: se pide ahora). */
-async function bajarDeInstagram(db: SupabaseClient, mediaId: string): Promise<{ buf: Buffer; esVideo: boolean }> {
+export async function bajarDeInstagram(db: SupabaseClient, mediaId: string): Promise<{ buf: Buffer; esVideo: boolean }> {
   const m = await must<{ remote_id: string; cos_social_accounts: { token_ref: string } | null }>(
     db.from("cos_media").select("remote_id, cos_social_accounts(token_ref)").eq("id", mediaId).single(),
     "publicación",

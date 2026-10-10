@@ -161,6 +161,8 @@ export async function renderOverlay(opts: {
   brand: string
   template: Template
   text: string
+  /** Bajada opcional, más chica debajo del título (los sets a pedido: el segundo renglón). */
+  subtitle?: string
   width: number
   height: number
   story: boolean
@@ -187,12 +189,21 @@ export async function renderOverlay(opts: {
   const logoSize = W * (opts.template === "banda" ? 0.16 : 0.13)
   const titleSize = W * (kit.uppercase ? 0.095 : 0.078) * (text.length > 28 ? 0.8 : 1)
 
-  const title = (color: string, size = titleSize) =>
+  const subtitle = (opts.subtitle ?? "").trim()
+  const titleOnly = (color: string, size: number) =>
     el(
       "div",
       { fontFamily: kit.font.name, fontSize: size, lineHeight: 1.05, letterSpacing: `${kit.spacing}em`, color, flexShrink: 1 },
       text,
     )
+  // Con bajada: título y debajo la bajada en la letra chica de la marca, a un poco más de la mitad del tamaño.
+  const title = (color: string, size = titleSize) =>
+    subtitle
+      ? el("div", { flexDirection: "column", gap: size * 0.18, flexShrink: 1 }, [
+          titleOnly(color, size),
+          el("div", { fontFamily: kit.small.name, fontSize: size * 0.58, lineHeight: 1.15, color, flexShrink: 1 }, subtitle),
+        ])
+      : titleOnly(color, size)
 
   let body: El
   if (opts.template === "banda" && text) {

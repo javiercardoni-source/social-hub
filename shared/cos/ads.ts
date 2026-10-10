@@ -267,7 +267,7 @@ export function guionReedicion(
  */
 export function guionRearmado(
   fuentes: { tipo: "foto" | "video"; duracion: number | null }[],
-  p: { gancho: string; tituloCierre: string; recuadro: string; pie: string | null; idea: string },
+  p: { gancho: string; tituloCierre: string; recuadro: string; pie: string | null; idea: string; medio?: string },
 ): GuionReel | null {
   const MOV: Toma["movimiento"][] = ["acercar", "paneo_derecha", "alejar", "paneo_izquierda"]
   const tomas: Toma[] = fuentes.slice(0, 4).map((f, i) => {
@@ -279,10 +279,13 @@ export function guionRearmado(
   if (!tomas.length) return null
   // Con una sola fuente, dos tomas (otro movimiento) para que no quede de 2 segundos.
   if (tomas.length === 1) tomas.push({ ...tomas[0], movimiento: "alejar", transicion: "fundido" })
+  // El texto del medio aparece en la tercera toma: con menos, se repiten tomas con otro movimiento.
+  const medio = (p.medio ?? "").trim()
+  for (let i = 0; medio && tomas.length < 3; i++) tomas.push({ ...tomas[i], movimiento: MOV[(tomas.length + 1) % 4], transicion: "fundido" })
   return {
     tomas,
     gancho: p.gancho,
-    medio: "",
+    medio,
     titulo_cierre: p.tituloCierre,
     recuadro: p.recuadro,
     musica: null,

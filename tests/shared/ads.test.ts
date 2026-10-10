@@ -96,6 +96,13 @@ describe("rearmado sobre fotos reales", () => {
     expect(guionRearmado([{ tipo: "foto", duracion: null }], { gancho: "", tituloCierre: "", recuadro: "", pie: null, idea: "" })!.tomas).toHaveLength(2)
     expect(guionRearmado([], { gancho: "", tituloCierre: "", recuadro: "", pie: null, idea: "" })).toBeNull()
   })
+  it("con texto del medio, asegura la tercera toma (ahí aparece)", () => {
+    const g = guionRearmado([{ tipo: "foto", duracion: null }], { gancho: "Puro salmón 40 piezas", medio: "Comé en casa", tituloCierre: "", recuadro: "", pie: null, idea: "" })!
+    expect(g.medio).toBe("Comé en casa")
+    expect(g.tomas).toHaveLength(3)
+    expect(new Set(g.tomas.map((t) => t.movimiento)).size).toBe(3)
+    expect(guionRearmado([{ tipo: "foto", duracion: null }], { gancho: "x", tituloCierre: "", recuadro: "", pie: null, idea: "" })!.medio).toBe("")
+  })
 })
 
 describe("textos", () => {

@@ -204,3 +204,109 @@ export async function elegirVisuales(opts: {
   const ia = new Set(r.parecen_ia)
   return { elegidas: [...new Set(r.elegidas.filter((i) => Number.isInteger(i) && i >= 0 && i < opts.candidatas.length && !ia.has(i)))].slice(0, 4), motivo: r.motivo }
 }
+
+// ── Sets a pedido (Anuncios → «Crear set», 10-10-2026) ──────────────────────
+
+const VersionesIA = z.object({
+  versiones: z
+    .array(
+      z.object({
+        texto: z.string().describe("Lo que va ESCRITO SOBRE la pieza: corto, que se lea en un segundo (máximo 50 letras). Puede tener dos renglones separados con «\\n»."),
+        copy: z.string().describe("Texto para acompañar la publicación o el anuncio (2 a 4 renglones, con la voz de la marca y el llamado a pedir)."),
+      }),
+    )
+    .describe("Las versiones pedidas, en orden"),
+})
+
+/**
+ * Versiones del texto que Javier escribió para la pieza. La 1 es SU texto tal cual (la IA solo le
+ * escribe el copy); las demás cambian el ángulo sin inventar datos (cantidades, productos).
+ */
+export async function versionesSet(opts: {
+  db: SupabaseClient
+  model: string
+  brand: BrandContext
+  textos: string
+  detalles: string | null
+  cantidad: number
+  pedido?: string
+}): Promise<{ texto: string; copy: string }[]> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 2500,
+    system: [{ type: "text", text: brandSystemPrompt(opts.brand), cache_control: { type: "ephemeral" } }],
+    messages: [
+      {
+        role: "user",
+        content: [
+          "Sos el redactor de anuncios de la marca. Javier escribió el texto que va SOBRE la pieza (foto o video del producto real):",
+          "",
+          opts.textos,
+          "",
+          opts.detalles ? `Detalles que te da Javier (producto, tono, público, qué destacar):\n${opts.detalles}\n` : "",
+          `Devolvé ${opts.cantidad} versiones. La versión 1 lleva el texto de Javier TAL CUAL (podés repartirlo en dos renglones con «\\n»).`,
+          opts.cantidad > 1 ? "Las demás: otro ángulo con LOS MISMOS datos (si dice 40 piezas, son 40; no inventes productos, cantidades ni promos). Que cada una se distinga de las otras." : "",
+          "Reglas duras para el texto sobre la pieza: sin precios ni montos (el precio va en el copy, y solo si está en Datos vigentes), nada de «sin TACC», «sin gluten» ni «apto celíacos», castellano rioplatense, máximo 50 letras.",
+          "El copy: con la voz de la marca, precios y promos SOLO de Datos vigentes copiados tal cual, sin prometer tiempos de entrega.",
+          opts.pedido ? `\n${opts.pedido}` : "",
+        ].join("\n"),
+      },
+    ],
+    output_config: { format: zodOutputFormat(VersionesIA) },
+  })
+  await logUsage(opts.db, { purpose: "ads:set-textos", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no escribió las versiones (stop: ${response.stop_reason})`)
+  return response.parsed_output.versiones.map((v) => ({ texto: v.texto.replace(/\\n/g, "\n").trim(), copy: v.copy.trim() }))
+}
+
+const MaterialIA = z.object({
+  parecen_ia: z
+    .array(z.number())
+    .describe("Números de TODAS las candidatas que parecen generadas por IA o renders 3D (formas idénticas y perfectas, etiquetas o packaging imposibles, texturas plásticas, manos raras). Ante la duda, incluila."),
+  elegidas: z.array(z.number()).describe("Números de las candidatas que muestran el producto pedido, de mejor a peor (máximo 8). Vacío si ninguna sirve."),
+  motivo: z.string().describe("Una línea: por qué esas"),
+})
+
+/**
+ * Entre fotos y videos reales de la marca (miniaturas), cuáles muestran lo que pide el set: el
+ * mismo producto, sin precio escrito, sin sellos y sin pinta de IA.
+ */
+export async function elegirMaterial(opts: {
+  db: SupabaseClient
+  model: string
+  pedido: string
+  candidatas: Buffer[]
+}): Promise<{ elegidas: number[]; motivo: string }> {
+  const response = await anthropic().messages.parse({
+    model: opts.model,
+    max_tokens: 1500,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...opts.candidatas.flatMap((c, i) => [
+            { type: "text" as const, text: `Candidata ${i}:` },
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: c.toString("base64") } },
+          ]),
+          {
+            type: "text",
+            text: [
+              "Vamos a armar anuncios con este texto encima, sobre fotos y videos REALES de la marca:",
+              opts.pedido,
+              "",
+              "Elegí las candidatas que muestran ese producto (o el más parecido de la marca). Que se vea la comida: mejor de cerca y apetitosa.",
+              "Descartá las que tengan precio escrito, sellos ('gluten free', 'sin TACC'), texto grande encima o personas en primer plano.",
+              "MUY IMPORTANTE: solo producto REAL fotografiado. Varias publicaciones de las marcas se hicieron con IA (Sora, renders): listalas en parecen_ia y no las elijas.",
+            ].join("\n"),
+          },
+        ],
+      },
+    ],
+    output_config: { format: zodOutputFormat(MaterialIA) },
+  })
+  await logUsage(opts.db, { purpose: "ads:set-material", model: opts.model, usage: response.usage })
+  if (!response.parsed_output) throw new Error(`la IA no eligió material (stop: ${response.stop_reason})`)
+  const r = response.parsed_output
+  const ia = new Set(r.parecen_ia)
+  return { elegidas: [...new Set(r.elegidas.filter((i) => Number.isInteger(i) && i >= 0 && i < opts.candidatas.length && !ia.has(i)))].slice(0, 8), motivo: r.motivo }
+}

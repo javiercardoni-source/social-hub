@@ -67,6 +67,7 @@ import { sugerenciasHandlers } from "./sugerencias.ts"
 import { adsHandlers } from "./ads.ts"
 import { vitrinaHandlers } from "./vitrina.ts"
 import { impresionHandlers } from "./impresion.ts"
+import { adSetHandlers } from "./ad-sets.ts"
 import { pedirAvisoAprobar, pushHandlers } from "./push.ts"
 import { musicaActualizarHandlers } from "./musica-actualizar.ts"
 import { ingredientesRevisarHandlers } from "./ingredientes-revisar.ts"
@@ -2272,6 +2273,7 @@ export const handlers: Record<string, Handler> = {
   ...tasteHandlers,
   ...sugerenciasHandlers,
   ...adsHandlers,
+  ...adSetHandlers,
   ...vitrinaHandlers,
   ...impresionHandlers,
   ...pushHandlers,

@@ -10,6 +10,8 @@ import { aprendizaje, porQueAnuncio, rankearAnuncios, TIPO_TEXTO, TIPOS, type Nu
 import { lunesDe } from "../../../../shared/cos/sugerencias"
 import { PedirTanda, Propuestas, type PropuestaUI } from "./propuestas"
 import { Vitrinas, type VitrinaUI } from "./vitrinas"
+import { Sets, type MaterialOpcion, type SetUI } from "./sets"
+import type { FormatoSet, FuenteSet } from "../../../../shared/cos/ad-sets"
 
 export const dynamic = "force-dynamic"
 
@@ -76,6 +78,65 @@ async function cargarVitrinas(brandId: string, slug: string): Promise<VitrinaUI[
   }))
 }
 
+/** Sets a pedido de la marca con sus versiones, vistas previas y links de descarga. */
+async function cargarSets(brandId: string): Promise<SetUI[]> {
+  const db = createAdminClient()
+  const { data: ss } = await db.from("cos_ad_sets").select("*").eq("brand_id", brandId).order("created_at", { ascending: false }).limit(15)
+  const ids = (ss ?? []).map((x) => x.id as string)
+  if (!ids.length) return []
+  const { data: vs } = await db.from("cos_ad_set_versiones").select("id, set_id, numero, texto, copy, estado, error, piezas").in("set_id", ids).order("numero")
+  type Pz = { formato: string; tipo: "video" | "imagen"; key: string }
+  type Mat = { thumb_key: string | null; tipo: "foto" | "video"; origen: string }
+  const piezaKeys = (vs ?? []).flatMap((v) => ((v.piezas ?? []) as Pz[]).map((p) => p.key))
+  const thumbKeys = (ss ?? []).flatMap((x) => ((x.material ?? []) as Mat[]).map((m) => m.thumb_key).filter(Boolean) as string[])
+  const [urls, descargas] = await Promise.all([
+    signedUrls([...piezaKeys, ...thumbKeys], 3 * 3600),
+    // Link que baja el archivo (con su nombre: «fasutofudo-v2-9x16.mp4») en vez de abrirlo.
+    piezaKeys.length
+      ? db.storage.from("cos-media").createSignedUrls([...new Set(piezaKeys)], 3 * 3600, { download: true }).then(({ data }) => Object.fromEntries((data ?? []).filter((d) => d.path && d.signedUrl).map((d) => [d.path as string, d.signedUrl])))
+      : Promise.resolve({} as Record<string, string>),
+  ])
+  const fecha = (iso: string) => new Date(iso).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })
+  return (ss ?? []).map((x) => ({
+    id: x.id,
+    textos: x.textos,
+    detalles: x.detalles,
+    versiones: x.versiones,
+    formato: x.formato as FormatoSet,
+    fuentes: x.fuentes as FuenteSet[],
+    estado: x.estado,
+    error: x.error,
+    motivo: x.motivo,
+    creado: fecha(x.created_at),
+    material: ((x.material ?? []) as Mat[]).map((m) => ({ thumb: m.thumb_key ? urls[m.thumb_key] ?? null : null, tipo: m.tipo, origen: m.origen })),
+    items: (vs ?? [])
+      .filter((v) => v.set_id === x.id)
+      .map((v) => ({
+        id: v.id,
+        numero: v.numero,
+        texto: v.texto,
+        copy: v.copy,
+        estado: v.estado,
+        error: v.error,
+        piezas: ((v.piezas ?? []) as Pz[]).map((p) => ({ formato: p.formato, tipo: p.tipo, url: urls[p.key] ?? null, descarga: descargas[p.key] ?? null })),
+      })),
+  }))
+}
+
+/** Lo que se puede elegir a mano: lo último del Archivo (listo para usar) y de Instagram. */
+async function cargarOpciones(brandId: string): Promise<MaterialOpcion[]> {
+  const db = createAdminClient()
+  const [{ data: ar }, { data: ig }] = await Promise.all([
+    db.from("cos_assets").select("id, thumb_key, media_type, description").eq("brand_id", brandId).in("status", ["READY", "IN_USE"]).neq("consent", "blocked").not("thumb_key", "is", null).not("current_version_id", "is", null).order("created_at", { ascending: false }).limit(60),
+    db.from("cos_media").select("id, thumb_key, format, caption").eq("brand_id", brandId).eq("platform", "instagram").in("format", ["feed", "reel", "carousel"]).not("thumb_key", "is", null).order("posted_at", { ascending: false }).limit(60),
+  ])
+  const urls = await signedUrls([...(ar ?? []), ...(ig ?? [])].map((x) => x.thumb_key as string), 3 * 3600)
+  return [
+    ...(ar ?? []).map((a) => ({ origen: "archivo" as const, id: a.id as string, thumb: urls[a.thumb_key as string] ?? null, tipo: (a.media_type === "video" ? "video" : "foto") as "foto" | "video", etiqueta: (a.description as string | null)?.slice(0, 80) ?? "Archivo" })),
+    ...(ig ?? []).map((m) => ({ origen: "instagram" as const, id: m.id as string, thumb: urls[m.thumb_key as string] ?? null, tipo: (m.format === "reel" ? "video" : "foto") as "foto" | "video", etiqueta: (m.caption as string | null)?.slice(0, 80) ?? "Instagram" })),
+  ]
+}
+
 const pesos = (n: number | null | undefined) => (n == null ? "—" : `$${Math.round(n).toLocaleString("es-AR")}`)
 
 function Chip({ children, tono }: { children: React.ReactNode; tono: "ok" | "mal" | "neutro" }) {
@@ -96,7 +157,7 @@ function Chip({ children, tono }: { children: React.ReactNode; tono: "ok" | "mal
 export default async function AnunciosPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   await requireMember("viewer")
   const { tab: tabRaw } = await searchParams
-  const tab = tabRaw === "ranking" ? "ranking" : tabRaw === "vitrinas" ? "vitrinas" : "propuestas"
+  const tab = tabRaw === "ranking" ? "ranking" : tabRaw === "vitrinas" ? "vitrinas" : tabRaw === "sets" ? "sets" : "propuestas"
   const brand = await getActiveBrand()
   if (!brand) {
     return (
@@ -179,9 +240,10 @@ export default async function AnunciosPage({ searchParams }: { searchParams: Pro
             Tanda lista en Meta, pausada. Prendela desde el Administrador de anuncios (o desde el Scheduler) cuando quieras.
           </p>
         )}
-        <nav className="flex gap-2" aria-label="Secciones">
+        <nav className="flex flex-wrap gap-2" aria-label="Secciones">
           {[
             { k: "propuestas", t: `Tanda de la semana (${propuestas.filter((p) => p.week === week && p.status !== "descartada").length})` },
+            { k: "sets", t: "Crear set" },
             { k: "ranking", t: "Ranking y filtro" },
             { k: "vitrinas", t: "Vitrinas" },
           ].map((x) => (
@@ -191,7 +253,9 @@ export default async function AnunciosPage({ searchParams }: { searchParams: Pro
           ))}
         </nav>
 
-        {tab === "vitrinas" ? (
+        {tab === "sets" ? (
+          <Sets sets={await cargarSets(brand.id)} opciones={await cargarOpciones(brand.id)} />
+        ) : tab === "vitrinas" ? (
           <Vitrinas vitrinas={await cargarVitrinas(brand.id, brand.slug)} linkFijo={`${VITRINA_URL}/${brand.slug}/`} />
         ) : tab === "propuestas" ? (
           <Propuestas propuestas={propuestas} semana={week} />
