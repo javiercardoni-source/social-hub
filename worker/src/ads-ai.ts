@@ -263,7 +263,7 @@ const MaterialIA = z.object({
   parecen_ia: z
     .array(z.number())
     .describe("Números de TODAS las candidatas que parecen generadas por IA o renders 3D (formas idénticas y perfectas, etiquetas o packaging imposibles, texturas plásticas, manos raras). Ante la duda, incluila."),
-  elegidas: z.array(z.number()).describe("Números de las candidatas que muestran el producto pedido, de mejor a peor (máximo 8). Vacío si ninguna sirve."),
+  elegidas: z.array(z.number()).describe("Números de las candidatas donde SE VE lo que nombra el texto, de la más fiel a la menos (máximo 8). Vacío si ninguna sirve."),
   motivo: z.string().describe("Una línea: por qué esas"),
 })
 
@@ -295,7 +295,8 @@ export async function elegirMaterial(opts: {
               "Vamos a armar anuncios con este texto encima, sobre fotos y videos REALES de la marca:",
               opts.pedido,
               "",
-              "Elegí las candidatas que muestran ese producto (o el más parecido de la marca). Que se vea la comida: mejor de cerca y apetitosa.",
+              "Elegí SOLO las candidatas que muestran claramente lo que dice el texto. Si nombra un ingrediente o un producto (ej. salmón, langostinos, onigiris), ese ingrediente tiene que VERSE en la foto: un roll de otra cosa no sirve aunque sea de la marca.",
+              "Mejor 2 que encajan de verdad que 8 que más o menos. La primera que elijas es la foto principal: tiene que ser la más fiel al texto y la más apetitosa (comida de cerca, bien iluminada).",
               "Descartá las que tengan precio escrito, sellos ('gluten free', 'sin TACC'), texto grande encima o personas en primer plano.",
               "MUY IMPORTANTE: solo producto REAL fotografiado. Varias publicaciones de las marcas se hicieron con IA (Sora, renders): listalas en parecen_ia y no las elijas.",
             ].join("\n"),
