@@ -246,9 +246,13 @@ const armarVersion: Handler = async (job, { db, log }) => {
         })
         if (!guion) throw new PermanentError("no hay material para el video")
         const { data: temas } = await db.from("cos_music_tracks").select("storage_key").eq("brand_id", set.brand_id).order("energy", { ascending: false, nullsFirst: false }).limit(3)
-        // Cada versión con otro tema (si la marca tiene varios).
-        const tema = temas?.length ? temas[(v.numero - 1) % temas.length] : null
-        const musica = tema ? await writeTmp(dir, "musica", await st.download(tema.storage_key as string)) : null
+        // Cada versión arranca con otro tema (si la marca tiene varios). Si un tema no baja (la
+        // biblioteca se renueva y quedan filas sin archivo), se prueba el siguiente; sin ninguno, va sin música.
+        let musica: string | null = null
+        for (let k = 0; k < (temas?.length ?? 0) && !musica; k++) {
+          const t = temas![(v.numero - 1 + k) % temas!.length]
+          musica = await st.download(t.storage_key as string).then((b) => writeTmp(dir, "musica", b)).catch((e) => (log("ads:set-version: tema sin archivo, pruebo otro", { tema: t.storage_key, error: String(e) }), null))
+        }
         const r = await armarReel({ guion, gancho: texto, archivos, kit, musica, dir })
         await st.upload(ruta("9x16", "video"), await readFile(r.archivo), "video/mp4")
         // 4:5 para el feed: recorte del 9:16 apenas corrido hacia abajo (el texto va al 24 % del alto).
